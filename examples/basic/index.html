@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYKNYC Wagmi Connector - Basic Example</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        code {
+            background: #e9ecef;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Consolas', monospace;
+        }
+        .wallet-info {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <h1>NYKNYC Wagmi Connector - Basic Example</h1>
+    
+    <div class="container">
+        <h2>Setup Instructions</h2>
+        <ol>
+            <li>Register your dApp at <a href="https://nyknyc.app/developers" target="_blank">NYKNYC Developer Portal</a></li>
+            <li>Get your <code>app_id</code> from the developer dashboard</li>
+            <li>Add your domain to the allowed origins in your dApp configuration</li>
+            <li>Replace <code>YOUR_APP_ID_HERE</code> in the script below with your actual app ID</li>
+            <li>Serve this file over HTTPS (required for Web Crypto API)</li>
+        </ol>
+    </div>
+
+    <div class="container">
+        <h2>Wallet Connection</h2>
+        <div id="wallet-status" class="status info">
+            Not connected
+        </div>
+        
+        <div id="wallet-info" class="wallet-info" style="display: none;">
+            <h3>Wallet Information</h3>
+            <p><strong>Address:</strong> <span id="wallet-address"></span></p>
+            <p><strong>Chain ID:</strong> <span id="chain-id"></span></p>
+            <p><strong>Chain Name:</strong> <span id="chain-name"></span></p>
+        </div>
+
+        <button id="connect-btn" onclick="connectWallet()">Connect NYKNYC Wallet</button>
+        <button id="disconnect-btn" onclick="disconnectWallet()" style="display: none;">Disconnect</button>
+    </div>
+
+    <div class="container">
+        <h2>Transaction Testing</h2>
+        <div style="display: none;" id="transaction-section">
+            <p>Send a small test transaction:</p>
+            <input type="text" id="recipient-address" placeholder="Recipient address (0x...)" style="width: 300px; padding: 8px; margin: 5px;">
+            <input type="text" id="amount" placeholder="Amount in ETH (e.g., 0.001)" style="width: 150px; padding: 8px; margin: 5px;">
+            <br>
+            <button onclick="sendTransaction()">Send Transaction</button>
+            <div id="transaction-status"></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Chain Switching</h2>
+        <div style="display: none;" id="chain-section">
+            <p>Switch to different networks:</p>
+            <button onclick="switchChain(1)">Ethereum Mainnet</button>
+            <button onclick="switchChain(137)">Polygon</button>
+            <button onclick="switchChain(42161)">Arbitrum</button>
+            <button onclick="switchChain(11155111)">Sepolia Testnet</button>
+        </div>
+    </div>
+
+    <!-- Include Wagmi and NYKNYC Connector -->
+    <script type="module">
+        // Note: In a real application, you would install these packages via npm
+        // and use a bundler like Vite, Webpack, or Rollup
+        
+        // For this example, we're showing the structure of how it would work
+        // You'll need to build and serve the connector package locally or from npm
+        
+        import { createConfig, connect, disconnect, getAccount, sendTransaction, switchChain } from '@wagmi/core'
+        import { mainnet, polygon, arbitrum, sepolia } from '@wagmi/core/chains'
+        import { nyknyc } from '@nyknyc/wagmi-connector'
+        import { parseEther } from 'viem'
+
+        // Replace with your actual app ID from NYKNYC Developer Portal
+        const APP_ID = 'YOUR_APP_ID_HERE'
+
+        // Create Wagmi config
+        const config = createConfig({
+            chains: [mainnet, polygon, arbitrum, sepolia],
+            connectors: [
+                nyknyc({
+                    appId: APP_ID,
+                    // redirectUri is optional - defaults to current origin + '/callback'
+                    redirectUri: window.location.origin + '/callback'
+                })
+            ],
+            // You would also need to configure transports for each chain
+            // transports: { ... }
+        })
+
+        // Make functions available globally for the HTML buttons
+        window.connectWallet = async function() {
+            try {
+                updateStatus('Connecting...', 'info')
+                
+                const result = await connect(config, { 
+                    connector: nyknyc({ appId: APP_ID }) 
+                })
+                
+                updateWalletInfo(result)
+                updateStatus('Connected successfully!', 'success')
+                
+                document.getElementById('connect-btn').style.display = 'none'
+                document.getElementById('disconnect-btn').style.display = 'inline-block'
+                document.getElementById('transaction-section').style.display = 'block'
+                document.getElementById('chain-section').style.display = 'block'
+                
+            } catch (error) {
+                console.error('Connection failed:', error)
+                updateStatus(`Connection failed: ${error.message}`, 'error')
+            }
+        }
+
+        window.disconnectWallet = async function() {
+            try {
+                await disconnect(config)
+                
+                updateStatus('Disconnected', 'info')
+                document.getElementById('wallet-info').style.display = 'none'
+                document.getElementById('connect-btn').style.display = 'inline-block'
+                document.getElementById('disconnect-btn').style.display = 'none'
+                document.getElementById('transaction-section').style.display = 'none'
+                document.getElementById('chain-section').style.display = 'none'
+                
+            } catch (error) {
+                console.error('Disconnect failed:', error)
+                updateStatus(`Disconnect failed: ${error.message}`, 'error')
+            }
+        }
+
+        window.sendTransaction = async function() {
+            try {
+                const recipient = document.getElementById('recipient-address').value
+                const amount = document.getElementById('amount').value
+                
+                if (!recipient || !amount) {
+                    updateTransactionStatus('Please fill in recipient address and amount', 'error')
+                    return
+                }
+
+                updateTransactionStatus('Sending transaction...', 'info')
+                
+                const hash = await sendTransaction(config, {
+                    to: recipient,
+                    value: parseEther(amount)
+                })
+                
+                updateTransactionStatus(`Transaction sent! Hash: ${hash}`, 'success')
+                
+            } catch (error) {
+                console.error('Transaction failed:', error)
+                updateTransactionStatus(`Transaction failed: ${error.message}`, 'error')
+            }
+        }
+
+        window.switchChain = async function(chainId) {
+            try {
+                updateStatus('Switching chain...', 'info')
+                
+                await switchChain(config, { chainId })
+                
+                const account = getAccount(config)
+                updateWalletInfo(account)
+                updateStatus('Chain switched successfully!', 'success')
+                
+            } catch (error) {
+                console.error('Chain switch failed:', error)
+                updateStatus(`Chain switch failed: ${error.message}`, 'error')
+            }
+        }
+
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById('wallet-status')
+            statusEl.textContent = message
+            statusEl.className = `status ${type}`
+        }
+
+        function updateTransactionStatus(message, type) {
+            const statusEl = document.getElementById('transaction-status')
+            statusEl.innerHTML = `<div class="status ${type}">${message}</div>`
+        }
+
+        function updateWalletInfo(account) {
+            if (account.address) {
+                document.getElementById('wallet-address').textContent = account.address
+                document.getElementById('chain-id').textContent = account.chainId
+                document.getElementById('chain-name').textContent = getChainName(account.chainId)
+                document.getElementById('wallet-info').style.display = 'block'
+            }
+        }
+
+        function getChainName(chainId) {
+            const chains = {
+                1: 'Ethereum Mainnet',
+                137: 'Polygon',
+                42161: 'Arbitrum One',
+                11155111: 'Sepolia Testnet'
+            }
+            return chains[chainId] || `Chain ${chainId}`
+        }
+
+        // Check if already connected on page load
+        window.addEventListener('load', () => {
+            const account = getAccount(config)
+            if (account.address) {
+                updateWalletInfo(account)
+                updateStatus('Connected', 'success')
+                document.getElementById('connect-btn').style.display = 'none'
+                document.getElementById('disconnect-btn').style.display = 'inline-block'
+                document.getElementById('transaction-section').style.display = 'block'
+                document.getElementById('chain-section').style.display = 'block'
+            }
+        })
+    </script>
+</body>
+</html>
