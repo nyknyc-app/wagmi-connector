@@ -38,7 +38,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nyknyc/wagmi-connector"
+    "url": "https://github.com/nyknyc-app/wagmi-connector"
   },
   "peerDependencies": {
     "@wagmi/core": "^2.20.3",
