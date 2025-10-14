@@ -40,15 +40,11 @@ export {
 
 export {
   buildAuthUrl,
-  initiateAuthRedirect,
-  handleAuthRedirect,
-  isAuthCallback,
-  extractCallbackData,
-  cleanupCallbackUrl,
   exchangeCodeForToken,
   getUserInfo,
   refreshAccessToken,
   validateState,
+  openAuthWindow,
 } from './utils/auth.js'
 
 export {

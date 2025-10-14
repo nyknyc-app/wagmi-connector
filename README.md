@@ -1,282 +1,250 @@
 # NYKNYC Wagmi Connector
 
-A Wagmi connector for NYKNYC's 4337 smart wallet platform, enabling seamless integration of account abstraction wallets into your dApps.
+The most reliable wagmi connector for Web3. No more dealing with unstable MetaMask or WalletConnect integrations.
 
-## Features
+## Web3 Wallets, Web2 Simple
 
-- 🔐 **OAuth 2.1 with PKCE** - Secure authentication flow without requiring backend secrets
-- 🏦 **4337 Account Abstraction** - Smart wallet functionality with gasless transactions
-- 🌐 **Multi-chain Support** - Works across 10+ major blockchain networks
-- 🔄 **Auto Token Refresh** - Seamless session management
-- 📱 **Popup-based Auth** - User-friendly authentication experience
-- 🛡️ **Type Safe** - Full TypeScript support with comprehensive type definitions
+NYKNYC brings the next million users to Web3 with a noncustodial smart wallet that works like Web2:
+- 🔐 **OAuth Sign-In** - Google, Twitter, or Email (no seed phrases required)
+- 🚀 **No Extensions** - Works in any browser without downloads
+- ⚡ **Always Working** - Unlike MetaMask or WalletConnect, NYKNYC just works
+- 💰 **$5 Free Gas** - Every new user gets $5 gas credits across all networks
+- 🏦 **100% Noncustodial** - OAuth for authentication only, users own their keys
 
-## Installation
+## Current Status (v0.1.1)
 
-```bash
-npm install @nyknyc/wagmi-connector @wagmi/core viem
-```
+### ✅ Fully Tested & Working
+- **Wallet Connection** - OAuth 2.1 authentication with PKCE
+- **Send Transactions** - 4337 account abstraction transactions  
+- **Network Switching** - Switch between supported chains
+- **SSR Support** - Compatible with Next.js and other SSR frameworks
+
+### ⚠️ Known Limitations
+- **Message Signing** - Not yet fully tested, may have issues
+- **Typed Data Signing** - Not yet fully tested, may have issues
+
+We're actively working on testing and improving all features. Please report any issues you encounter.
+
+## Supported Networks
+
+NYKNYC supports 5 blockchain networks:
+
+- **Ethereum** (1)
+- **Arbitrum One** (42161)
+- **BNB Smart Chain** (56)
+- **Base** (8453)
+- **Polygon** (137)
+
+More networks coming soon!
 
 ## Quick Start
 
-### 1. Register Your dApp
+### Step 1: Register Your App
 
-First, register your dApp on the [NYKNYC Developer Portal](https://nyknyc.app/developers) to get your `app_id`.
+Get your App ID from the [NYKNYC Developer Portal](https://nyknyc.app/app/dev/apps)
 
-### 2. Configure the Connector
+### Step 2: Install
+
+```bash
+npm install @nyknyc/wagmi-connector
+```
+
+### Step 3: Add to Your Wagmi Config
 
 ```typescript
-import { createConfig } from '@wagmi/core'
-import { mainnet, polygon, arbitrum } from '@wagmi/core/chains'
+import { createConfig, http } from 'wagmi'
+import { mainnet, polygon, arbitrum, base, bsc } from 'wagmi/chains'
 import { nyknyc } from '@nyknyc/wagmi-connector'
 
 const config = createConfig({
-  chains: [mainnet, polygon, arbitrum],
+  chains: [mainnet, polygon, arbitrum, base, bsc],
   connectors: [
     nyknyc({
       appId: 'your_app_id_here', // Get this from NYKNYC Developer Portal
-      redirectUri: 'http://localhost:3000/callback', // Optional: defaults to current origin + '/callback'
-    })
+    }),
   ],
-  // ... other wagmi config
+  transports: {
+    [mainnet.id]: http(),
+    [polygon.id]: http(),
+    [arbitrum.id]: http(),
+    [base.id]: http(),
+    [bsc.id]: http(),
+  },
 })
 ```
 
-### 3. Connect Wallet
+That's it! 🎉
+
+## Usage Examples
+
+### Connect Wallet
 
 ```typescript
-import { connect } from '@wagmi/core'
+import { useConnect } from 'wagmi'
+import { nyknyc } from '@nyknyc/wagmi-connector'
 
-// Connect to NYKNYC wallet
-await connect(config, { connector: nyknyc({ appId: 'your_app_id' }) })
-```
-
-### 4. Send Transactions
-
-```typescript
-import { sendTransaction } from '@wagmi/core'
-
-const hash = await sendTransaction(config, {
-  to: '0x...',
-  value: parseEther('0.1'),
-  data: '0x...'
-})
-```
-
-## Configuration Options
-
-```typescript
-interface NyknycParameters {
-  /** Your app ID from NYKNYC Developer Portal */
-  appId: string
+function ConnectButton() {
+  const { connect } = useConnect()
   
-  /** OAuth redirect URI (optional) */
-  redirectUri?: string
-  
-  /** NYKNYC platform base URL (optional) */
-  baseUrl?: string
-  
-  /** NYKNYC API base URL (optional) */
-  apiUrl?: string
+  return (
+    <button onClick={() => connect({ connector: nyknyc({ appId: 'your_app_id' }) })}>
+      Connect NYKNYC
+    </button>
+  )
 }
 ```
 
-## Supported Chains
-
-NYKNYC supports the following blockchain networks:
-
-- Ethereum Mainnet (1)
-- Ethereum Sepolia (11155111)
-- Polygon (137)
-- Arbitrum One (42161)
-- Optimism (10)
-- BNB Smart Chain (56)
-- Avalanche (43114)
-- Fantom (250)
-- Gnosis Chain (100)
-- Base (8453)
-
-## Authentication Flow
-
-The NYKNYC connector uses OAuth 2.1 with PKCE (Proof Key for Code Exchange) for secure authentication:
-
-1. User clicks connect
-2. Popup opens to NYKNYC authentication page
-3. User completes registration/login and approves your dApp
-4. Authorization code is returned via callback
-5. Connector exchanges code for access token
-6. User wallet information is retrieved and stored
-
-## Transaction Flow
-
-NYKNYC uses 4337 account abstraction for transactions:
-
-1. dApp initiates transaction via Wagmi
-2. Transaction details sent to NYKNYC API
-3. Signing popup opens for user approval
-4. User signs with passkey/biometric authentication
-5. Transaction is broadcast and confirmed
-6. Transaction hash returned to dApp
-
-## React Example
+### Send Transaction
 
 ```typescript
-import { useConnect, useAccount, useSendTransaction } from 'wagmi'
-import { nyknyc } from '@nyknyc/wagmi-connector'
+import { useSendTransaction } from 'wagmi'
 import { parseEther } from 'viem'
 
-function WalletConnection() {
-  const { connect } = useConnect()
-  const { address, isConnected } = useAccount()
+function SendTransaction() {
   const { sendTransaction } = useSendTransaction()
 
-  const handleConnect = () => {
-    connect({ 
-      connector: nyknyc({ 
-        appId: 'your_app_id_here' 
-      }) 
-    })
-  }
-
-  const handleSendTransaction = () => {
+  const handleSend = () => {
     sendTransaction({
       to: '0x...',
       value: parseEther('0.01')
     })
   }
 
-  if (isConnected) {
-    return (
-      <div>
-        <p>Connected: {address}</p>
-        <button onClick={handleSendTransaction}>
-          Send Transaction
-        </button>
-      </div>
-    )
-  }
+  return <button onClick={handleSend}>Send Transaction</button>
+}
+```
+
+### Switch Network
+
+```typescript
+import { useSwitchChain } from 'wagmi'
+import { polygon } from 'wagmi/chains'
+
+function SwitchNetwork() {
+  const { switchChain } = useSwitchChain()
 
   return (
-    <button onClick={handleConnect}>
-      Connect NYKNYC Wallet
+    <button onClick={() => switchChain({ chainId: polygon.id })}>
+      Switch to Polygon
     </button>
   )
 }
 ```
 
-## Next.js Example
+## With Multiple Connectors
+
+NYKNYC works seamlessly alongside other wallet connectors:
 
 ```typescript
-// pages/_app.tsx
-import { WagmiProvider } from 'wagmi'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createConfig } from '@wagmi/core'
+import { createConfig, http } from 'wagmi'
+import { mainnet, polygon } from 'wagmi/chains'
+import { injected, walletConnect } from 'wagmi/connectors'
 import { nyknyc } from '@nyknyc/wagmi-connector'
 
 const config = createConfig({
   chains: [mainnet, polygon],
   connectors: [
-    nyknyc({
-      appId: process.env.NEXT_PUBLIC_NYKNYC_APP_ID!,
-      redirectUri: `${process.env.NEXT_PUBLIC_BASE_URL}/callback`
-    })
+    injected(),
+    walletConnect({ projectId: 'YOUR_WC_PROJECT_ID' }),
+    nyknyc({ appId: 'your_app_id_here' }), // Always works!
   ],
-  // ... other config
+  transports: {
+    [mainnet.id]: http(),
+    [polygon.id]: http(),
+  },
 })
+```
 
-const queryClient = new QueryClient()
+## Next.js / SSR Support
 
-export default function App({ Component, pageProps }) {
-  return (
-    <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>
-        <Component {...pageProps} />
-      </QueryClientProvider>
-    </WagmiProvider>
-  )
+NYKNYC works perfectly with server-side rendering:
+
+```typescript
+import { createConfig, http, cookieStorage, createStorage } from 'wagmi'
+import { mainnet, polygon } from 'wagmi/chains'
+import { nyknyc } from '@nyknyc/wagmi-connector'
+
+export function getConfig() {
+  return createConfig({
+    chains: [mainnet, polygon],
+    connectors: [
+      nyknyc({
+        appId: process.env.NEXT_PUBLIC_NYKNYC_APP_ID!,
+      }),
+    ],
+    storage: createStorage({
+      storage: cookieStorage,
+    }),
+    ssr: true,
+    transports: {
+      [mainnet.id]: http(),
+      [polygon.id]: http(),
+    },
+  })
 }
 ```
 
-## Error Handling
+## How It Works
 
-The connector provides detailed error messages for common scenarios:
+1. **User clicks connect** - Your dApp initiates NYKNYC connection
+2. **OAuth popup opens** - User signs in with Google, Twitter, or Email
+3. **Secure authentication** - PKCE flow authorizes your app
+4. **Wallet ready** - User can immediately start transacting
 
-```typescript
-try {
-  await connect(config, { connector: nyknycConnector })
-} catch (error) {
-  if (error.message.includes('popup')) {
-    // User blocked popups or closed popup
-    console.log('Please allow popups for this site')
-  } else if (error.message.includes('cancelled')) {
-    // User cancelled authentication
-    console.log('Authentication was cancelled')
-  } else {
-    // Other errors
-    console.error('Connection failed:', error.message)
-  }
-}
-```
+All signing happens on NYKNYC with passkeys or connected wallets. Your dApp stays simple.
 
-## Advanced Usage
+## Why NYKNYC?
 
-### Custom Provider Access
+### For Users
+- Sign in with Google/Twitter/Email (no browser extensions)
+- Passkey signing (Face ID, Touch ID, Windows Hello)
+- $5 free gas credits on registration
+- Works across 5 networks seamlessly
 
-```typescript
-import { getConnectorClient } from '@wagmi/core'
+### For Developers
+- Most reliable wagmi connector
+- No more MetaMask/WalletConnect instability
+- OAuth-based, always works
+- Optional transaction sponsorship
+- 4337 smart account benefits
 
-const client = await getConnectorClient(config)
-const provider = await client.getProvider()
+## Transaction Sponsorship
 
-// Access NYKNYC-specific methods
-if (provider instanceof NyknycProvider) {
-  // Custom provider methods available here
-}
-```
+Want to sponsor gas for your users? NYKNYC makes it simple. Every new user gets $5 gas credits automatically, and you can sponsor additional transactions.
 
-### Manual Token Management
+### How to Set Up Sponsorship
 
-```typescript
-import { 
-  exchangeCodeForToken, 
-  refreshAccessToken,
-  getUserInfo 
-} from '@nyknyc/wagmi-connector'
+1. Go to [NYKNYC Gas Policies](https://nyknyc.app/app/dev/gas-policies)
+2. Create a new policy:
+   - Choose your application from the dropdown
+   - Select supported chains
+   - Choose supported contract addresses
+3. That's it! Your users' transactions will be sponsored automatically
 
-// Exchange authorization code manually
-const tokens = await exchangeCodeForToken(params, code, codeVerifier)
+With gas sponsorship, your users can interact with your dApp without worrying about gas fees.
 
-// Refresh tokens manually
-const newTokens = await refreshAccessToken(apiUrl, refreshToken)
+## Built on Standards
 
-// Get user info manually
-const userInfo = await getUserInfo(apiUrl, accessToken)
-```
+NYKNYC leverages battle-tested protocols:
 
-## Security Considerations
-
-- Always use HTTPS in production
-- Validate redirect URIs in your NYKNYC app configuration
-- Store sensitive data securely (tokens are automatically handled)
-- Implement proper error handling for authentication flows
+- **ERC-4337** - Account abstraction standard
+- **Kernel 3.3** - Smart account implementation by ZeroDev
+- **EIP-1193** - Provider specification for dApp compatibility
+- **OAuth 2.1 + PKCE** - Secure authentication flow
 
 ## Browser Support
 
+Works in all modern browsers:
 - Chrome 67+
 - Firefox 60+
 - Safari 13+
 - Edge 79+
 
-Requires Web Crypto API support for PKCE implementation.
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
 ## Support
 
 - 📧 Email: dev@nyknyc.app
 - 📖 Documentation: [docs.nyknyc.app](https://docs.nyknyc.app)
+- 🌐 Website: [nyknyc.app](https://nyknyc.app)
 - 💬 Discord: [NYKNYC Community](https://discord.gg/nyknyc)
 
 ## License

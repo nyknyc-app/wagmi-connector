@@ -1,5 +1,4 @@
 import type { 
-  AuthCallbackData, 
   TokenResponse, 
   UserInfo, 
   PKCEParams,
@@ -14,109 +13,18 @@ export function buildAuthUrl(
   pkceParams: PKCEParams
 ): string {
   const baseUrl = params.baseUrl || 'https://nyknyc.app'
-  const redirectUri = params.redirectUri || `${window.location.origin}/callback`
   
   const url = new URL(`${baseUrl}/auth`)
   url.searchParams.set('app_id', params.appId)
-  url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('code_challenge', pkceParams.codeChallenge)
   url.searchParams.set('code_challenge_method', 'S256')
   url.searchParams.set('state', pkceParams.state)
   url.searchParams.set('response_type', 'code')
   
+  // Add callback origin so the OAuth page knows where to send postMessage
+  url.searchParams.set('callback_origin', window.location.origin)
+  
   return url.toString()
-}
-
-/**
- * Initiates OAuth redirect flow
- */
-export function initiateAuthRedirect(authUrl: string): void {
-  // Store current URL for post-auth redirect
-  sessionStorage.setItem('nyknyc.preAuthUrl', window.location.href)
-  
-  // Redirect to OAuth provider
-  window.location.href = authUrl
-}
-
-/**
- * Checks if current URL contains OAuth callback parameters
- */
-export function isAuthCallback(): boolean {
-  const urlParams = new URLSearchParams(window.location.search)
-  return urlParams.has('code') && urlParams.has('state')
-}
-
-/**
- * Extracts OAuth callback data from current URL
- */
-export function extractCallbackData(): AuthCallbackData {
-  const urlParams = new URLSearchParams(window.location.search)
-  const code = urlParams.get('code')
-  const state = urlParams.get('state')
-
-  if (!code || !state) {
-    throw new Error('Missing OAuth callback parameters')
-  }
-
-  return { code, state }
-}
-
-/**
- * Cleans up OAuth callback parameters from URL
- */
-export function cleanupCallbackUrl(): void {
-  const url = new URL(window.location.href)
-  url.searchParams.delete('code')
-  url.searchParams.delete('state')
-  
-  // Update URL without triggering page reload
-  window.history.replaceState({}, document.title, url.toString())
-}
-
-/**
- * Handles OAuth redirect flow - checks for callback and processes if present
- */
-export async function handleAuthRedirect(
-  _params: NyknycParameters
-): Promise<AuthCallbackData | null> {
-  if (!isAuthCallback()) {
-    console.log('No OAuth callback detected in current URL')
-    return null
-  }
-
-  console.log('OAuth callback detected, processing...')
-
-  try {
-    // Extract callback data
-    const callbackData = extractCallbackData()
-    console.log('Extracted callback data:', { code: callbackData.code.substring(0, 10) + '...', state: callbackData.state })
-    
-    // Get stored PKCE parameters
-    const storedPkce = sessionStorage.getItem('nyknyc.pkce')
-    if (!storedPkce) {
-      console.error('Missing PKCE parameters in sessionStorage')
-      throw new Error('Missing PKCE parameters. Authentication session may have expired.')
-    }
-
-    const pkceParams = JSON.parse(storedPkce)
-    console.log('Retrieved PKCE parameters:', { state: pkceParams.state })
-    
-    // Validate state parameter
-    validateState(callbackData.state, pkceParams.state)
-    console.log('State parameter validated successfully')
-    
-    // Clean up URL but DON'T remove PKCE parameters yet - they're needed for token exchange
-    cleanupCallbackUrl()
-    console.log('Callback URL cleaned up')
-    
-    return callbackData
-  } catch (error) {
-    console.error('Error handling auth redirect:', error)
-    // Clean up on error
-    cleanupCallbackUrl()
-    sessionStorage.removeItem('nyknyc.pkce')
-    throw error
-  }
 }
 
 /**
@@ -128,13 +36,11 @@ export async function exchangeCodeForToken(
   codeVerifier: string
 ): Promise<TokenResponse> {
   const apiUrl = params.apiUrl || 'https://api.nyknyc.app'
-  const redirectUri = params.redirectUri || `${window.location.origin}/callback`
   
   const requestBody = {
     grant_type: 'authorization_code',
     code,
     app_id: params.appId,
-    redirect_uri: redirectUri,
     code_verifier: codeVerifier,
   }
   
@@ -246,21 +152,22 @@ export function validateState(receivedState: string, expectedState: string): voi
 }
 
 /**
- * Opens OAuth in a new tab/window (not a sized popup) and resolves on callback postMessage.
- * The child window is expected to land on redirectUri (same-origin with the dApp by default)
- * and post to the opener:
- *   window.opener.postMessage({ type: 'NYKNYC_AUTH_SUCCESS', code, state }, window.location.origin);
- * On error, it should post:
- *   window.opener.postMessage({ type: 'NYKNYC_AUTH_ERROR', error }, window.location.origin);
+ * Opens OAuth in a new tab/window (not a sized popup) and resolves when NYKNYC sends postMessage.
+ * The window opens NYKNYC's OAuth page where the user authenticates.
+ * After authentication, NYKNYC posts the result back to the opener:
+ *   window.opener.postMessage({ type: 'NYKNYC_AUTH_SUCCESS', code, state }, dappOrigin);
+ * On error, it posts:
+ *   window.opener.postMessage({ type: 'NYKNYC_AUTH_ERROR', error }, dappOrigin);
  *
  * Security:
- * - Only accepts messages from window.location.origin (i.e., same-origin callback page).
+ * - Only accepts postMessages from NYKNYC's origin (validated against baseUrl parameter).
  * - Times out after 5 minutes.
  * - Detects manual close via win.closed polling.
  */
 export function openAuthWindow(
   authUrl: string,
-  preOpenedWindow?: Window | null
+  preOpenedWindow?: Window | null,
+  baseUrl?: string
 ): Promise<{ code: string; state: string }> {
   return new Promise((resolve, reject) => {
     // Open a new tab/window. If a preOpenedWindow was provided (opened synchronously on user gesture), reuse it to avoid popup blockers.
@@ -275,7 +182,9 @@ export function openAuthWindow(
       return
     }
 
-    const expectedOrigin = window.location.origin
+    // Expected origin is NYKNYC's origin (where the OAuth page is hosted)
+    // NOT the dApp's origin (window.location.origin)
+    const expectedOrigin = baseUrl || 'https://nyknyc.app'
 
     const onMessage = (event: MessageEvent) => {
       try {
@@ -283,7 +192,6 @@ export function openAuthWindow(
           return
         }
       } catch {
-        // Ignore unparsable origins
         return
       }
 
@@ -308,7 +216,11 @@ export function openAuthWindow(
 
     const onTimeout = window.setTimeout(() => {
       cleanup()
-      try { if (!win.closed) win.close() } catch {}
+      try { 
+        if (!win.closed) {
+          win.close()
+        }
+      } catch {}
       reject(new Error('Authentication timed out'))
     }, 5 * 60 * 1000)
 

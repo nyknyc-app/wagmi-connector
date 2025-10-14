@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2025-01-10
+
+### Added
+- **Wallet Connection**: Full support for connecting NYKNYC wallets via OAuth 2.1 with PKCE
+- **Transaction Support**: Send transactions with proper 4337 account abstraction support
+- **Network Switching**: Switch between supported chains seamlessly
+
+### Fixed
+- **SSR Compatibility**: Added server-side rendering (SSR) guards to prevent `localStorage` and `sessionStorage` errors in Next.js and other SSR frameworks
+- Added `isAvailable()` check in `LocalStorageBackend` class to ensure browser environment before accessing localStorage
+- Created SSR-safe helper functions (`setSessionStorageItem`, `getSessionStorageItem`, `removeSessionStorageItem`) for all sessionStorage operations
+- Updated all direct `localStorage` and `sessionStorage` access to use the safe wrapper functions
+- Package now works seamlessly in both SSR and CSR environments without additional user configuration
+
+### Known Limitations
+- Message signing and typed data signing features are not yet fully tested and may have issues
+- Some advanced features from 0.1.0 are still under testing
+
 ## [0.1.0] - 2025-01-10
 
 ### Added

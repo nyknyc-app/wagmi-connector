@@ -12,9 +12,11 @@ import {
   createSignRequest,
   waitForSignCompletion,
   openSigningWindow,
+  openUnsupportedChainWindow,
 } from './utils/api.js'
 import { refreshAccessToken } from './utils/auth.js'
 import { NyknycStorage } from './utils/storage.js'
+import { Logger } from './utils/logger.js'
 
 const isStrictHex = (s: string) =>
   typeof s === 'string' && /^0x[0-9a-fA-F]*$/.test(s)
@@ -42,6 +44,7 @@ export class NyknycProvider implements EthereumProvider {
   private session: NyknycSession | null = null
   private params: NyknycParameters
   private storage: NyknycStorage
+  private logger: Logger
   private listeners: Map<string, Set<(...args: any[]) => void>> = new Map()
   /**
    * EIP-5792 call batches: map of batch id -> list of NYKNYC transaction_ids
@@ -52,6 +55,7 @@ export class NyknycProvider implements EthereumProvider {
   constructor(params: NyknycParameters, storage: NyknycStorage) {
     this.params = params
     this.storage = storage
+    this.logger = new Logger(params.developmentMode)
   }
 
   /**
@@ -94,6 +98,8 @@ export class NyknycProvider implements EthereumProvider {
     switch (method) {
       case 'eth_requestAccounts':
       case 'eth_accounts':
+        // For eth_requestAccounts during reconnection, return cached accounts if available
+        // Otherwise return empty array (connector will handle OAuth if needed)
         return this.getAccounts()
 
       case 'eth_chainId':
@@ -112,8 +118,7 @@ export class NyknycProvider implements EthereumProvider {
         return this.switchChain(params[0].chainId)
 
       case 'wallet_addEthereumChain':
-        // For now, we don't support adding new chains
-        throw new Error('Adding new chains is not supported')
+        return this.addEthereumChain(params[0])
 
       case 'eth_getBalance':
       case 'eth_getTransactionCount':
@@ -176,8 +181,9 @@ export class NyknycProvider implements EthereumProvider {
     this.session.expiresAt = Date.now() + refreshed.expires_in * 1000
     try {
       await this.storage.setSession(this.session)
-    } catch {
-      // Non-fatal: storage failures are already handled gracefully inside storage
+    } catch (error) {
+      // Non-fatal: storage failures are already handled gracefully
+      this.logger.warn('Failed to persist refreshed session:', error)
     }
     return this.session.accessToken
   }
@@ -573,8 +579,8 @@ export class NyknycProvider implements EthereumProvider {
   }
 
   /**
-   * Switches the active chain (mock/local only).
-   * No backend call is made since chain is chosen per-action on the platform.
+   * Switches the active chain.
+   * Validates that the requested chain is supported by the wallet.
    */
   private async switchChain(chainId: string): Promise<void> {
     if (!this.session) {
@@ -586,10 +592,42 @@ export class NyknycProvider implements EthereumProvider {
       throw new Error('Invalid chainId')
     }
 
+    // Check if the chain is supported by the wallet (only if supportedChains is available)
+    if (this.session.supportedChains && !this.session.supportedChains.includes(numericChainId)) {
+      const baseUrl = this.params.baseUrl || 'https://nyknyc.app'
+      openUnsupportedChainWindow(numericChainId, baseUrl)
+      throw new Error(`Chain ${numericChainId} is not supported by NYKNYC wallet`)
+    }
+
     // Update session locally and emit chainChanged.
     // Connector.onChainChanged will persist to storage and emit wagmi change event.
     this.session.chainId = numericChainId
     this.emit('chainChanged', `0x${numericChainId.toString(16)}`)
+  }
+
+  /**
+   * Adds a new Ethereum chain.
+   * Validates that the requested chain is supported by the wallet.
+   */
+  private async addEthereumChain(params: { chainId: string }): Promise<null> {
+    if (!this.session) {
+      throw new Error('No active session')
+    }
+
+    const numericChainId = parseInt(params.chainId, 16)
+    if (Number.isNaN(numericChainId)) {
+      throw new Error('Invalid chainId')
+    }
+
+    // Check if the chain is supported by the wallet (only if supportedChains is available)
+    if (this.session.supportedChains && !this.session.supportedChains.includes(numericChainId)) {
+      const baseUrl = this.params.baseUrl || 'https://nyknyc.app'
+      openUnsupportedChainWindow(numericChainId, baseUrl)
+      throw new Error(`Chain ${numericChainId} is not supported by NYKNYC wallet`)
+    }
+
+    // If the chain is already supported, return null (success)
+    return null
   }
 
   /**
@@ -626,5 +664,23 @@ export class NyknycProvider implements EthereumProvider {
         }
       })
     }
+  }
+
+  /**
+   * Disconnects the provider and clears internal state
+   */
+  disconnect(): void {
+    this.session = null
+    this.callBatches.clear()
+    this.emit('disconnect')
+  }
+
+  /**
+   * Closes the provider and removes all listeners
+   */
+  close(): void {
+    this.listeners.clear()
+    this.session = null
+    this.callBatches.clear()
   }
 }

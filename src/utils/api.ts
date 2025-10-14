@@ -252,6 +252,19 @@ export async function waitForSignCompletion(
 }
 
 /**
+ * Opens unsupported chain error page in a new tab/window
+ */
+export function openUnsupportedChainWindow(chainId: number, baseUrl?: string): void {
+  const base = baseUrl || 'https://nyknyc.app'
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const url = `${base}/error/unsupported-chain?chainId=${chainId}&origin=${encodeURIComponent(origin)}`
+  
+  if (typeof window !== 'undefined') {
+    window.open(url, '_blank')
+  }
+}
+
+/**
  * Opens signing flow in a new tab/window and waits for completion message (postMessage).
  * Polling is expected to be handled by the caller after this resolves.
  */

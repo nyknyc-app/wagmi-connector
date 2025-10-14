@@ -1,6 +1,6 @@
 {
   "name": "@nyknyc/wagmi-connector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "NYKNYC 4337 Smart Wallet Connector for Wagmi",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -36,21 +36,24 @@
   ],
   "author": "NYKNYC",
   "license": "MIT",
+  "homepage": "https://nyknyc.app/",
   "repository": {
     "type": "git",
     "url": "https://github.com/nyknyc-app/wagmi-connector"
   },
   "peerDependencies": {
-    "@wagmi/core": "^2.20.3",
-    "viem": "^2.37.5"
+    "@wagmi/core": "^2.22.0",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.14",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
+    "@wagmi/core": "^2.22.0",
     "eslint": "^8.57.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
+    "viem": "^2.38.2",
     "vitest": "^3.2.4"
   },
   "sideEffects": false

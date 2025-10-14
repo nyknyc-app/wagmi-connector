@@ -3,8 +3,6 @@ import type { Address } from 'viem'
 export interface NyknycParameters {
   /** The app ID registered with NYKNYC platform */
   appId: string
-  /** Redirect URI for OAuth callback (defaults to current origin + '/callback') */
-  redirectUri?: string
   /** Base URL for NYKNYC platform (defaults to 'https://nyknyc.app') */
   baseUrl?: string
   /** API URL for NYKNYC platform (defaults to 'https://api.nyknyc.app') */
@@ -21,6 +19,7 @@ export interface NyknycSession {
   expiresAt: number
   walletAddress: Address
   chainId: number
+  supportedChains?: number[]
 }
 
 export interface UserInfo {
@@ -116,8 +115,6 @@ export interface SignRequest {
   wallet_address: Address
   chain_id: number
   app_id: string
-  /** Optional return URL (reserved for future redirect flows; not used by default) */
-  return_url?: string
   /** Used for postMessage origin check in window/tab flow */
   callback_origin?: string
   /** Payload for personal_sign */

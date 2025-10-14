@@ -192,6 +192,7 @@ export class NyknycStorage {
 
 /**
  * LocalStorage backend implementation
+ * SSR-safe: Checks for browser environment before accessing localStorage
  * @private
  */
 class LocalStorageBackend implements StorageBackend {
@@ -201,7 +202,21 @@ class LocalStorageBackend implements StorageBackend {
     this.keyPrefix = keyPrefix
   }
 
+  /**
+   * Check if localStorage is available (browser environment)
+   * Prevents SSR errors in Next.js and other server-side frameworks
+   * @private
+   */
+  private isAvailable(): boolean {
+    return typeof window !== 'undefined' && typeof localStorage !== 'undefined'
+  }
+
   getItem(key: string): string | null {
+    // Guard against SSR - return null if not in browser
+    if (!this.isAvailable()) {
+      return null
+    }
+
     try {
       return localStorage.getItem(this.getFullKey(key))
     } catch (error) {
@@ -211,6 +226,12 @@ class LocalStorageBackend implements StorageBackend {
   }
 
   setItem(key: string, value: string): void {
+    // Guard against SSR - silently fail if not in browser
+    if (!this.isAvailable()) {
+      console.warn('NYKNYC: localStorage not available (SSR environment)')
+      return
+    }
+
     try {
       localStorage.setItem(this.getFullKey(key), value)
     } catch (error) {
@@ -220,6 +241,11 @@ class LocalStorageBackend implements StorageBackend {
   }
 
   removeItem(key: string): void {
+    // Guard against SSR - silently fail if not in browser
+    if (!this.isAvailable()) {
+      return
+    }
+
     try {
       localStorage.removeItem(this.getFullKey(key))
     } catch (error) {

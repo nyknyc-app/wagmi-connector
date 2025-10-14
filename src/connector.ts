@@ -1,413 +1,477 @@
-import { createConnector } from '@wagmi/core'
-import { getAddress } from 'viem'
-import type { 
-  NyknycParameters, 
-  NyknycSession 
-} from './types.js'
+import { 
+  createConnector,
+  ChainNotConfiguredError 
+} from '@wagmi/core'
+import {
+  getAddress,
+  numberToHex,
+  SwitchChainError,
+  UserRejectedRequestError,
+  type ProviderRpcError
+} from 'viem'
+import type { Address, Chain, AddEthereumChainParameter, ProviderConnectInfo } from 'viem'
+import type { NyknycParameters } from './types.js'
 import { NyknycProvider } from './provider.js'
 import { NyknycStorage } from './utils/storage.js'
-import { validateCryptoSupport, generatePKCEParams } from './utils/pkce.js'
-import { 
-  buildAuthUrl,
-  handleAuthRedirect,
-  isAuthCallback,
-  exchangeCodeForToken, 
-  getUserInfo,
-  refreshAccessToken,
-  openAuthWindow,
-  verifyAccessToken
-} from './utils/auth.js'
-import type { ProviderConnectInfo } from 'viem'
-
-const PKCE_STORAGE_KEY = 'nyknyc.pkce'
+import { validateCryptoSupport } from './utils/pkce.js'
+import { Logger } from './utils/logger.js'
+import { SessionManager } from './managers/SessionManager.js'
+import { AuthFlowManager } from './managers/AuthFlowManager.js'
+import { EventManager } from './managers/EventManager.js'
 
 /**
  * NYKNYC 4337 Smart Wallet Connector for Wagmi
  */
 export function nyknyc(parameters: NyknycParameters) {
   return createConnector<NyknycProvider>((config) => {
+    // Top-level state
     let provider: NyknycProvider | null = null
-    let session: NyknycSession | null = null
+    let sessionManager: SessionManager | null = null
+    let authFlowManager: AuthFlowManager | null = null
+    let eventManager: EventManager | null = null
+    let logger: Logger
+    let storage: NyknycStorage
+    let isSetupComplete = false
 
-    // Provider event listener references (attached on connect, removed on disconnect)
-    type Listener = (...args: any[]) => void
-    let onAccountsChangedListener: Listener | undefined
-    let onChainChangedListener: Listener | undefined
-    let onDisconnectListener: Listener | undefined
+    // Initialize logger and storage immediately
+    logger = new Logger(parameters.developmentMode)
+    storage = new NyknycStorage(config.storage, 'nyknyc')
     
-    // Initialize internal storage with wagmi storage as primary and localStorage as fallback
-    const storage = new NyknycStorage(config.storage, 'nyknyc')
-    const apiUrl = parameters.apiUrl || 'https://api.nyknyc.app'
+    logger.log('Creating new connector instance')
 
     /**
-     * Restores session from storage and handles token refresh if needed
+     * Initialize managers (lazy initialization)
      */
-    const restoreSession = async (): Promise<void> => {
-      try {
-        const storedSession = await storage.getSession()
-        
-        if (!storedSession) {
-          return
-        }
-
-        // Check if session is still valid
-        if (storage.isSessionValid(storedSession)) {
-          try {
-            // Optionally verify access token with server to catch revocation/blacklist
-            if (parameters.verifyOnRestore) {
-              const valid = await verifyAccessToken(apiUrl, storedSession.accessToken)
-              if (!valid) {
-                throw new Error('Access token invalid on restore')
-              }
-            }
-
-            session = {
-              ...storedSession,
-              walletAddress: getAddress(storedSession.walletAddress),
-            }
-
-            if (provider) {
-              provider.updateSession(session)
-            }
-          } catch (e) {
-            // Token invalidated or verification failed -> attempt refresh
-            try {
-              console.log('NYKNYC: Stored access token invalid, attempting token refresh...')
-              const refreshedTokens = await refreshAccessToken(apiUrl, storedSession.refreshToken)
-              
-              session = {
-                ...storedSession,
-                accessToken: refreshedTokens.access_token,
-                refreshToken: refreshedTokens.refresh_token,
-                expiresAt: Date.now() + refreshedTokens.expires_in * 1000,
-                walletAddress: getAddress(storedSession.walletAddress),
-              }
-              
-              await storage.setSession(session)
-              console.log('NYKNYC: Token refresh successful after failed verification')
-              
-              if (provider) {
-                provider.updateSession(session)
-              }
-            } catch (error) {
-              console.warn('NYKNYC: Verification+refresh failed, clearing session:', error)
-              await storage.removeSession()
-            }
-          }
-        } else {
-          // Try to refresh the token
-          try {
-            console.log('NYKNYC: Session expired, attempting token refresh...')
-            const refreshedTokens = await refreshAccessToken(
-              apiUrl,
-              storedSession.refreshToken
-            )
-            
-            session = {
-              ...storedSession,
-              accessToken: refreshedTokens.access_token,
-              refreshToken: refreshedTokens.refresh_token,
-              expiresAt: Date.now() + (refreshedTokens.expires_in * 1000),
-              walletAddress: getAddress(storedSession.walletAddress),
-            }
-            
-            await storage.setSession(session)
-            console.log('NYKNYC: Token refresh successful')
-            
-            if (provider) {
-              provider.updateSession(session)
-            }
-          } catch (error) {
-            console.warn('NYKNYC: Token refresh failed, clearing session:', error)
-            await storage.removeSession()
-          }
-        }
-      } catch (error) {
-        console.error('NYKNYC: Failed to restore session:', error)
-        await storage.removeSession()
+    const initializeManagers = () => {
+      if (!sessionManager) {
+        sessionManager = new SessionManager(storage, parameters, logger)
+      }
+      if (!authFlowManager) {
+        authFlowManager = new AuthFlowManager(parameters, sessionManager, logger)
+      }
+      if (!eventManager) {
+        eventManager = new EventManager(logger)
       }
     }
 
-    // Helper functions for auth flow
-    const initiateAuthFlow = async (preOpenedWindow?: Window | null): Promise<{ accounts: readonly `0x${string}`[]; chainId: number }> => {
-      // Generate PKCE parameters
-      const pkceParams = await generatePKCEParams(parameters.developmentMode)
+    /**
+     * Handle reconnection flow (uses cached session)
+     */
+    const handleReconnection = async (
+      params: Parameters<typeof connector.connect>[0],
+      prov: NyknycProvider
+    ) => {
+      logger.log('Reconnection flow started')
       
-      // Store PKCE parameters temporarily
-      sessionStorage.setItem(PKCE_STORAGE_KEY, JSON.stringify(pkceParams))
-
-      // Build authorization URL
-      const authUrl = buildAuthUrl(parameters, pkceParams)
-
-      // Open OAuth in a new tab/window and wait for callback message
-      const { code, state } = await openAuthWindow(authUrl, preOpenedWindow)
-
-      // Complete the flow with received code/state
-      return await completeAuthFlow({ code, state })
-    }
-
-    const completeAuthFlow = async (callbackData: any): Promise<{ accounts: readonly `0x${string}`[]; chainId: number }> => {
-      console.log('Starting auth flow completion with callback data:', { code: callbackData.code.substring(0, 10) + '...', state: callbackData.state })
+      const accounts = await connector.getAccounts().catch((err) => {
+        logger.error('Failed to get accounts during reconnect:', err)
+        return []
+      })
       
-      // Get stored PKCE parameters
-      const storedPkce = sessionStorage.getItem(PKCE_STORAGE_KEY)
-      if (!storedPkce) {
-        console.error('Missing PKCE parameters in sessionStorage during completeAuthFlow')
-        console.log('Available sessionStorage keys:', Object.keys(sessionStorage))
-        throw new Error('Missing PKCE parameters. Authentication session may have expired.')
+      // If no cached accounts during reconnection, fail gracefully
+      if (accounts.length === 0) {
+        logger.warn('No cached session available for reconnection')
+        throw new Error('No cached session available for reconnection')
       }
-
-      const pkceParams = JSON.parse(storedPkce)
-      console.log('Retrieved PKCE parameters for token exchange:', { state: pkceParams.state, hasCodeVerifier: !!pkceParams.codeVerifier })
-
-      try {
-        // Exchange authorization code for tokens
-        console.log('Exchanging authorization code for tokens...')
-        const tokens = await exchangeCodeForToken(
-          parameters,
-          callbackData.code,
-          pkceParams.codeVerifier
-        )
-        console.log('Token exchange successful, expires in:', tokens.expires_in, 'seconds')
-
-        // Get user information
-        console.log('Fetching user information...')
-        const userInfo = await getUserInfo(apiUrl, tokens.access_token)
-        console.log('User info retrieved:', { 
-          wallet_address: userInfo.wallet_address, 
-          current_chain_id: userInfo.current_chain_id
+      
+      logger.log('Reconnecting with cached accounts:', accounts)
+      
+      // Attach event listeners
+      if (eventManager && !eventManager.isAttached()) {
+        eventManager.attach(prov, connector)
+        logger.log('Event listeners attached')
+      }
+      
+      // Get current chain ID
+      let currentChainId = await connector.getChainId()
+      logger.log('Current chain ID:', currentChainId)
+      
+      // Switch to requested chain if provided
+      if (params?.chainId && currentChainId !== params.chainId) {
+        logger.log('Switching to requested chain:', params.chainId)
+        const chain = await connector.switchChain!({ 
+          chainId: params.chainId,
+          addEthereumChainParameter: undefined 
+        }).catch((error) => {
+          logger.error('Chain switch failed:', error)
+          if (error.code === UserRejectedRequestError.code) throw error
+          return { id: currentChainId }
         })
+        currentChainId = chain?.id ?? currentChainId
+      }
+      
+      logger.log('Reconnection successful')
+      
+      // Return cached state
+      return {
+        accounts: (params?.withCapabilities
+          ? accounts.map((address) => ({ address, capabilities: {} }))
+          : accounts) as never,
+        chainId: currentChainId,
+      }
+    }
 
-        // Create session
-        session = {
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          expiresAt: Date.now() + (tokens.expires_in * 1000),
-          walletAddress: getAddress(userInfo.wallet_address),
-          chainId: userInfo.current_chain_id,
+    /**
+     * Handle normal connection flow (may trigger OAuth)
+     */
+    const handleNormalConnection = async (
+      params: Parameters<typeof connector.connect>[0],
+      prov: NyknycProvider
+    ) => {
+      logger.log('Normal connection flow started')
+      
+      // Request accounts - provider returns cached if session exists
+      let accounts = (
+        (await prov.request({
+          method: 'eth_requestAccounts',
+          params: [],
+        })) as string[]
+      ).map((x) => getAddress(x))
+      
+      // If no accounts (no session), trigger OAuth flow
+      if (accounts.length === 0) {
+        logger.log('No session found, initiating OAuth flow')
+        const preWindow = typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null
+        const result = await authFlowManager!.initiate(preWindow)
+        accounts = [...result.accounts] as Address[]
+        
+        // Update provider with new session
+        const session = sessionManager!.get()
+        if (session) {
+          prov.updateSession(session)
         }
-
-        // Store session using internal storage
-        await storage.setSession(session)
-        console.log('NYKNYC: Session stored successfully')
-
-        // Update provider
-        if (provider) {
-          provider.updateSession(session)
-          console.log('Provider updated with new session')
-        }
-
-        // Clean up PKCE parameters
-        sessionStorage.removeItem(PKCE_STORAGE_KEY)
-        console.log('PKCE parameters cleaned up')
-
+        
         // Emit connect event
         config.emitter.emit('connect', {
-          accounts: [session.walletAddress],
-          chainId: session.chainId,
+          accounts: result.accounts,
+          chainId: result.chainId,
         })
-        console.log('Connect event emitted')
+      }
 
-        return {
-          accounts: [session.walletAddress],
-          chainId: session.chainId,
-        }
-      } catch (error) {
-        console.error('Error during auth flow completion:', error)
-        // Clean up PKCE parameters on error
-        sessionStorage.removeItem(PKCE_STORAGE_KEY)
-        throw error
+      // Attach event listeners
+      if (eventManager && !eventManager.isAttached()) {
+        eventManager.attach(prov, connector)
+        logger.log('Event listeners attached')
+      }
+
+      // Get current chain ID
+      let currentChainId = await connector.getChainId()
+
+      // Switch to requested chain if provided
+      if (params?.chainId && currentChainId !== params.chainId) {
+        logger.log('Switching to requested chain:', params.chainId)
+        const chain = await connector.switchChain!({ 
+          chainId: params.chainId,
+          addEthereumChainParameter: undefined 
+        }).catch((error) => {
+          if (error.code === UserRejectedRequestError.code) throw error
+          return { id: currentChainId }
+        })
+        currentChainId = chain?.id ?? currentChainId
+      }
+
+      logger.log('Normal connection successful')
+
+      // Return result
+      return {
+        accounts: (params?.withCapabilities
+          ? accounts.map((address) => ({ address, capabilities: {} }))
+          : accounts) as never,
+        chainId: currentChainId,
       }
     }
 
-    return {
+    const connector = {
       id: 'nyknyc',
       name: 'NYKNYC',
       type: 'nyknyc' as const,
-      icon: 'https://nyknyc.app/logo.svg', // You can update this with your actual logo URL
+      icon: 'https://nyknyc.app/logo.svg',
 
       async setup() {
-        // Validate crypto support
-        validateCryptoSupport(parameters.developmentMode)
+        logger.log('setup() called, isSetupComplete:', isSetupComplete)
+        if (isSetupComplete) return
         
-        // Initialize provider
-        provider = new NyknycProvider(parameters, storage)
-        
-        // Try to restore session from storage
-        await restoreSession()
+        try {
+          // Initialize managers
+          initializeManagers()
+          
+          // Initialize provider to ensure it's ready
+          await this.getProvider()
+          
+          // Try to restore session during setup
+          const session = sessionManager!.get()
+          if (!session) {
+            const restored = await sessionManager!.restore()
+            if (restored) {
+              logger.log('Session restored during setup:', {
+                address: restored.walletAddress,
+                chainId: restored.chainId
+              })
+            }
+          }
+          
+          isSetupComplete = true
+          logger.log('setup() completed successfully')
+        } catch (error) {
+          logger.error('setup() failed:', error)
+          // Don't throw - setup failures shouldn't break the connector
+        }
       },
 
-      async connect() {
+      async connect({ chainId, isReconnecting, withCapabilities }: { 
+        chainId?: number
+        isReconnecting?: boolean
+        withCapabilities?: boolean
+      } = {}) {
         try {
-          // Helper to attach provider listeners once
-          const attachProviderListeners = async () => {
-            const p = await this.getProvider()
-            if (!onAccountsChangedListener) {
-              const listener: Listener = this.onAccountsChanged.bind(this) as Listener
-              onAccountsChangedListener = listener
-              p.on('accountsChanged', listener)
-            }
-            if (!onChainChangedListener) {
-              const listener: Listener = this.onChainChanged.bind(this) as Listener
-              onChainChangedListener = listener
-              p.on('chainChanged', listener)
-            }
-            if (!onDisconnectListener) {
-              const listener: Listener = this.onDisconnect.bind(this) as Listener
-              onDisconnectListener = listener
-              p.on('disconnect', listener)
-            }
+          logger.log('connect() called with params:', {
+            isReconnecting,
+            chainId
+          })
+          
+          const isReconnectingFlow = isReconnecting || false
+          
+          // Ensure setup is complete
+          if (!isSetupComplete) {
+            logger.log('Setup not complete, calling setup()')
+            await this.setup?.()
           }
-
-          // If we already have a valid session, attach listeners and return
-          if (session && storage.isSessionValid(session)) {
-            await attachProviderListeners()
-            return {
-              accounts: [session.walletAddress],
-              chainId: session.chainId,
-            }
+          
+          // Get provider
+          const prov = await this.getProvider()
+          logger.log('Provider obtained, has session:', !!sessionManager!.get())
+          
+          // Handle reconnection flow
+          if (isReconnectingFlow) {
+            return await handleReconnection({ chainId, isReconnecting, withCapabilities }, prov)
           }
-
-          // If URL contains OAuth callback params, handle them (no new window)
-          if (isAuthCallback()) {
-            const callbackData = await handleAuthRedirect(parameters)
-            if (callbackData) {
-              const result = await completeAuthFlow(callbackData)
-              await attachProviderListeners()
-              return result
-            }
-          }
-
-          // Start new OAuth flow in a new tab/window (pre-open to avoid popup blockers)
-          const preWindow = typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null
-          // Optional: let consumers know we're connecting
-          // @ts-ignore - emitter may accept message events with arbitrary payloads
-          config.emitter.emit?.('message', { type: 'connecting' })
-
-          const result = await initiateAuthFlow(preWindow)
-          await attachProviderListeners()
-          return result
+          
+          // Handle normal connection flow
+          return await handleNormalConnection({ chainId, isReconnecting, withCapabilities }, prov)
         } catch (error) {
-          // Clean up on error
-          sessionStorage.removeItem(PKCE_STORAGE_KEY)
+          logger.error('connect() failed:', error)
+          
+          // Clean up OAuth state on error
+          authFlowManager?.cleanup()
+          
+          // Wrap user rejection errors
+          if (
+            /(user closed modal|accounts received is empty|user denied account|request rejected)/i.test(
+              (error as Error).message,
+            )
+          ) {
+            throw new UserRejectedRequestError(error as Error)
+          }
           throw error
         }
       },
 
-      async disconnect() {
+      async disconnect(): Promise<void> {
+        logger.log('disconnect() called')
+        const prov = await this.getProvider()
+
         // Clear session
-        session = null
+        sessionManager?.clear()
 
-        // Update provider
-        if (provider) {
-          provider.updateSession(null)
+        // Detach event listeners
+        if (eventManager) {
+          eventManager.detach(prov)
         }
 
-        // Detach provider listeners
-        if (provider) {
-          if (onAccountsChangedListener) {
-            provider.removeListener('accountsChanged', onAccountsChangedListener)
-            onAccountsChangedListener = undefined
-          }
-          if (onChainChangedListener) {
-            provider.removeListener('chainChanged', onChainChangedListener)
-            onChainChangedListener = undefined
-          }
-          if (onDisconnectListener) {
-            provider.removeListener('disconnect', onDisconnectListener)
-            onDisconnectListener = undefined
-          }
-        }
+        // Disconnect and close the provider
+        prov.disconnect()
+        prov.close()
 
-        // Remove from storage using internal storage
-        await storage.removeSession()
+        // Remove from storage
+        await sessionManager?.remove()
 
         // Emit disconnect event
         config.emitter.emit('disconnect')
+        logger.log('Disconnected successfully')
       },
 
-      async getAccounts() {
+      async getAccounts(): Promise<Address[]> {
+        logger.log('getAccounts() called')
+        const session = sessionManager?.get()
         if (!session) {
           return []
         }
         return [session.walletAddress]
       },
 
-      async getChainId() {
+      async getChainId(): Promise<number> {
+        logger.log('getChainId() called')
+        const session = sessionManager?.get()
         if (!session) {
           throw new Error('Not connected')
         }
         return session.chainId
       },
 
-      async getProvider() {
+      async getProvider(): Promise<NyknycProvider> {
+        logger.log('getProvider() called, provider exists:', !!provider)
+        
         if (!provider) {
-          throw new Error('Provider not initialized')
+          logger.log('Creating new provider instance')
+          
+          // Validate crypto support
+          validateCryptoSupport(parameters.developmentMode)
+          
+          // Initialize managers if not already done
+          initializeManagers()
+          
+          // Initialize provider
+          provider = new NyknycProvider(parameters, storage)
+          
+          // Try to restore session from storage
+          const restored = await sessionManager!.restore()
+          if (restored) {
+            provider.updateSession(restored)
+            logger.log('Session restored in getProvider:', {
+              address: restored.walletAddress,
+              chainId: restored.chainId
+            })
+          }
         }
+        
         return provider
       },
 
-      async isAuthorized() {
-        if (!session) {
+      async isAuthorized(): Promise<boolean> {
+        try {
+          initializeManagers()
+          
+          // Try to restore session if we don't have one
+          const session = sessionManager!.get()
+          if (!session) {
+            await sessionManager!.restore()
+          }
+          
+          // Check if we have a valid session
+          return sessionManager!.isValid()
+        } catch {
           return false
         }
-        return storage.isSessionValid(session)
       },
 
-      async switchChain({ chainId }) {
-        if (!session || !provider) {
+      async switchChain({ addEthereumChainParameter, chainId }: { 
+        addEthereumChainParameter?: AddEthereumChainParameter
+        chainId: number 
+      }): Promise<Chain> {
+        logger.log('switchChain() called for chain:', chainId)
+        
+        const session = sessionManager?.get()
+        if (!session) {
+          logger.error('switchChain failed: Not connected')
           throw new Error('Not connected')
         }
+        
+        const prov = await this.getProvider()
+        logger.log('Provider obtained for chain switch')
 
-        // Delegate to provider (mock/local). Provider emits 'chainChanged',
-        // and connector.onChainChanged will persist + emit wagmi 'change'.
-        await provider.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: `0x${chainId.toString(16)}` }],
-        })
+        const chain = config.chains.find((chain) => chain.id === chainId)
+        if (!chain) {
+          logger.error('Chain not configured:', chainId)
+          throw new SwitchChainError(new ChainNotConfiguredError())
+        }
 
-        // Return the requested chain (Wagmi contract)
-        return config.chains.find((c) => c.id === chainId) || config.chains[0]
+        try {
+          await prov.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: numberToHex(chain.id) }],
+          })
+          return chain
+        } catch (error) {
+          // Indicates chain is not added to provider
+          if ((error as ProviderRpcError).code === 4902) {
+            try {
+              let blockExplorerUrls: string[] | undefined
+              if (addEthereumChainParameter?.blockExplorerUrls)
+                blockExplorerUrls = addEthereumChainParameter.blockExplorerUrls
+              else
+                blockExplorerUrls = chain.blockExplorers?.default.url
+                  ? [chain.blockExplorers?.default.url]
+                  : []
+
+              let rpcUrls: readonly string[]
+              if (addEthereumChainParameter?.rpcUrls?.length)
+                rpcUrls = addEthereumChainParameter.rpcUrls
+              else rpcUrls = [chain.rpcUrls.default?.http[0] ?? '']
+
+              const addEthereumChain = {
+                blockExplorerUrls,
+                chainId: numberToHex(chainId),
+                chainName: addEthereumChainParameter?.chainName ?? chain.name,
+                iconUrls: addEthereumChainParameter?.iconUrls,
+                nativeCurrency:
+                  addEthereumChainParameter?.nativeCurrency ??
+                  chain.nativeCurrency,
+                rpcUrls,
+              } satisfies AddEthereumChainParameter
+
+              await prov.request({
+                method: 'wallet_addEthereumChain',
+                params: [addEthereumChain],
+              })
+
+              return chain
+            } catch (error) {
+              throw new UserRejectedRequestError(error as Error)
+            }
+          }
+
+          throw new SwitchChainError(error as Error)
+        }
       },
 
-      onAccountsChanged(accounts) {
-        if (accounts.length === 0) {
-          // Clear session and emit disconnect
-          session = null
-          if (provider) {
-            provider.updateSession(null)
-          }
-          config.emitter.emit('disconnect')
-        } else {
+      onAccountsChanged(accounts: Address[]): void {
+        if (accounts.length === 0) this.onDisconnect()
+        else
           config.emitter.emit('change', {
             accounts: accounts.map(getAddress),
           })
-        }
       },
 
-      onChainChanged(chainId: string | number) {
+      onChainChanged(chainId: string | number): void {
         const id = Number(chainId)
+        const session = sessionManager?.get()
         if (session) {
           if (session.chainId !== id) {
             session.chainId = id
+            sessionManager!.set(session)
             storage.setSession(session)
           }
         }
         config.emitter.emit('change', { chainId: id })
       },
 
-      onConnect(connectInfo: ProviderConnectInfo) {
-        // Convert chainId from hex string to number for the event
+      onConnect(connectInfo: ProviderConnectInfo): void {
         const chainId = parseInt(connectInfo.chainId, 16)
+        const session = sessionManager?.get()
         config.emitter.emit('connect', {
           accounts: session ? [session.walletAddress] : [],
           chainId,
         })
       },
 
-      onDisconnect(_error?: Error) {
+      async onDisconnect(_error?: Error): Promise<void> {
         config.emitter.emit('disconnect')
+
+        const prov = provider
+        
+        // Clear session
+        sessionManager?.clear()
+
+        // Remove event listeners
+        if (prov && eventManager) {
+          eventManager.detach(prov)
+        }
+
+        // Remove from storage
+        await sessionManager?.remove()
       },
     }
+
+    return connector
   })
 }
