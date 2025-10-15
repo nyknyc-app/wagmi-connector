@@ -226,7 +226,7 @@ export class NyknycProvider implements EthereumProvider {
       )
 
       // Build and open transactions page URL in a new tab (align with signing flow)
-      const popupUrl = `${baseUrl}/app/transactions/${resp.id}`
+      const popupUrl = `${baseUrl}/app/transactions/${resp.id}?autoClose=true`
       await openSigningWindow(popupUrl, baseUrl) // resolves immediately, polling continues below
 
       // Return as soon as the backend provides a transaction hash (post-bundler broadcast)

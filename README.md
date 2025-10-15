@@ -245,7 +245,7 @@ Works in all modern browsers:
 - 📧 Email: dev@nyknyc.app
 - 📖 Documentation: [docs.nyknyc.app](https://docs.nyknyc.app)
 - 🌐 Website: [nyknyc.app](https://nyknyc.app)
-- 💬 Discord: [NYKNYC Community](https://discord.gg/nyknyc)
+- 💬 Community: [NYKNYC in DAOForum](https://daoforum.org/forums/nyknyc/)
 
 ## License
 
