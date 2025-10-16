@@ -47,6 +47,14 @@ describe('NYKNYC Provider - Core Functionality', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
+    // Mock window.open for popup tests
+    const mockWindow = {
+      closed: false,
+      location: { href: '' },
+      close: vi.fn(),
+    }
+    global.window.open = vi.fn().mockReturnValue(mockWindow)
+
     // Mock storage
     mockStorage = {
       getSession: vi.fn().mockResolvedValue(null),

@@ -72,6 +72,26 @@ export interface AuthCallbackData {
   state: string
 }
 
+/**
+ * OAuth Polling Types
+ * Used for fallback authentication when postMessage fails due to OAuth redirects
+ */
+
+/**
+ * Response from OAuth polling endpoint
+ * Indicates the current state of the authentication request
+ */
+export interface AuthPollResponse {
+  /** Current status of the authentication request */
+  status: 'pending' | 'completed' | 'error' | 'expired'
+  /** Authorization code (only present when status is 'completed') */
+  code?: string
+  /** Error message (only present when status is 'error' or 'expired') */
+  error?: string
+  /** Optional: seconds until the auth request expires */
+  expires_in?: number
+}
+
 export interface ChainSwitchRequest {
   chain_id: number
 }

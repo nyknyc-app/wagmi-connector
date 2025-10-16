@@ -206,6 +206,9 @@ export class NyknycProvider implements EthereumProvider {
     const apiUrl = this.params.apiUrl || 'https://api.nyknyc.app'
     const baseUrl = this.params.baseUrl || 'https://nyknyc.app'
 
+    // Open about:blank synchronously to avoid popup blockers
+    const preWindow = typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null
+
     // Prepare transaction request (raw EVM fields)
     const transactionRequest: TransactionRequest = {
       wallet_address: this.session.walletAddress,
@@ -227,7 +230,7 @@ export class NyknycProvider implements EthereumProvider {
 
       // Build and open transactions page URL in a new tab (align with signing flow)
       const popupUrl = `${baseUrl}/app/transactions/${resp.id}?autoClose=true`
-      await openSigningWindow(popupUrl, baseUrl) // resolves immediately, polling continues below
+      await openSigningWindow(popupUrl, baseUrl, preWindow) // resolves immediately, polling continues below
 
       // Return as soon as the backend provides a transaction hash (post-bundler broadcast)
       const status = await waitForTransactionHash(
@@ -246,6 +249,12 @@ export class NyknycProvider implements EthereumProvider {
 
       return status.transaction_hash
     } catch (error) {
+      // Close pre-opened window if it exists and there was an error
+      if (preWindow && !preWindow.closed) {
+        try {
+          preWindow.close()
+        } catch {}
+      }
       this.emit('error', error)
       throw error
     }
@@ -261,6 +270,9 @@ export class NyknycProvider implements EthereumProvider {
 
     const apiUrl = this.params.apiUrl || 'https://api.nyknyc.app'
     const baseUrl = this.params.baseUrl || 'https://nyknyc.app'
+
+    // Open about:blank synchronously to avoid popup blockers
+    const preWindow = typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null
 
     // Build sign request payload (Policy A: include message_text when hex)
     const body: SignRequest = {
@@ -297,7 +309,7 @@ export class NyknycProvider implements EthereumProvider {
       )
 
       // Open signing in a new tab/window (postMessage optional)
-      await openSigningWindow(resp.popup_url, baseUrl)
+      await openSigningWindow(resp.popup_url, baseUrl, preWindow)
 
       // Wait until signing completes
       const done = await waitForSignCompletion(
@@ -318,6 +330,12 @@ export class NyknycProvider implements EthereumProvider {
       // Return the final signature (validator / ERC-1271 compatible)
       return sig
     } catch (error) {
+      // Close pre-opened window if it exists and there was an error
+      if (preWindow && !preWindow.closed) {
+        try {
+          preWindow.close()
+        } catch {}
+      }
       this.emit('error', error)
       throw error
     }
@@ -333,6 +351,9 @@ export class NyknycProvider implements EthereumProvider {
 
     const apiUrl = this.params.apiUrl || 'https://api.nyknyc.app'
     const baseUrl = this.params.baseUrl || 'https://nyknyc.app'
+
+    // Open about:blank synchronously to avoid popup blockers
+    const preWindow = typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null
 
     // Accept both JSON string and object for v4
     const typedData = typeof _typedData === 'string' ? JSON.parse(_typedData) : _typedData
@@ -354,7 +375,7 @@ export class NyknycProvider implements EthereumProvider {
         signReq,
         this.refreshAndPersist.bind(this)
       )
-      await openSigningWindow(resp.popup_url, baseUrl)
+      await openSigningWindow(resp.popup_url, baseUrl, preWindow)
       const done = await waitForSignCompletion(
         apiUrl,
         this.session.accessToken,
@@ -372,6 +393,12 @@ export class NyknycProvider implements EthereumProvider {
 
       return sig
     } catch (error) {
+      // Close pre-opened window if it exists and there was an error
+      if (preWindow && !preWindow.closed) {
+        try {
+          preWindow.close()
+        } catch {}
+      }
       this.emit('error', error)
       throw error
     }

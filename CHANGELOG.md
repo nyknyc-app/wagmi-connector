@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2025-10-16
+### Added
+- **Popup Blocked Notification**: Added snackbar component to notify users when authentication popup is blocked, with a retry button for better UX
+- **Authentication Polling Fallback**: Implemented hybrid authentication flow with automatic polling fallback when postMessage fails (e.g., during OAuth redirects with Google/Discord). Starts polling after 10 seconds if direct communication doesn't work
+
+### Improved
+- Enhanced authentication reliability for external OAuth providers that break postMessage context
+
 ## [0.1.2] - 2025-10-15
 ### Changed
 - Added autoClose parameter to transaction popup for improved UX

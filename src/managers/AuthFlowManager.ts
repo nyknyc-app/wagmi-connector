@@ -43,9 +43,19 @@ export class AuthFlowManager {
     const authUrl = buildAuthUrl(this.params, pkceParams)
     this.logger.debug('OAuth', 'Authorization URL built')
 
-    // Open OAuth in a new tab/window and wait for callback message
-    const { code, state } = await openAuthWindow(authUrl, preOpenedWindow, this.params.baseUrl)
-    this.logger.debug('OAuth', 'Authorization code received')
+    // Get API URL for polling
+    const apiUrl = this.params.apiUrl || 'https://api.nyknyc.app'
+
+    // Open OAuth in a new tab/window with hybrid postMessage + polling strategy
+    // This handles both direct auth (email/OTP) and OAuth redirects (Google/Discord)
+    const { code, state } = await openAuthWindow(
+      authUrl,
+      pkceParams.state,  // Used for polling fallback
+      apiUrl,            // For polling endpoint
+      preOpenedWindow,
+      this.params.baseUrl
+    )
+    this.logger.debug('OAuth', 'Authorization code received via postMessage or polling')
 
     // Complete the flow with received code/state
     return await this.complete({ code, state })

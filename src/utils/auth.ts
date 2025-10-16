@@ -152,41 +152,79 @@ export function validateState(receivedState: string, expectedState: string): voi
 }
 
 /**
- * Opens OAuth in a new tab/window (not a sized popup) and resolves when NYKNYC sends postMessage.
- * The window opens NYKNYC's OAuth page where the user authenticates.
- * After authentication, NYKNYC posts the result back to the opener:
- *   window.opener.postMessage({ type: 'NYKNYC_AUTH_SUCCESS', code, state }, dappOrigin);
- * On error, it posts:
- *   window.opener.postMessage({ type: 'NYKNYC_AUTH_ERROR', error }, dappOrigin);
- *
+ * Opens OAuth in a new tab/window with hybrid postMessage + polling fallback strategy.
+ * 
+ * This function implements a robust authentication flow that handles both:
+ * 1. Direct postMessage communication (when NYKNYC page can message back)
+ * 2. Polling fallback (when OAuth redirects break postMessage context)
+ * 
+ * Flow:
+ * - Opens NYKNYC OAuth page in new window
+ * - Listens for postMessage immediately (fast path for non-OAuth flows)
+ * - After 10 seconds without postMessage, starts polling backend
+ * - First successful method wins and returns the authorization code
+ * 
+ * Use Cases:
+ * - postMessage wins: User logs in with email/OTP (no external redirect)
+ * - Polling wins: User logs in with Google/Discord (external OAuth breaks postMessage)
+ * 
  * Security:
- * - Only accepts postMessages from NYKNYC's origin (validated against baseUrl parameter).
- * - Times out after 5 minutes.
- * - Detects manual close via win.closed polling.
+ * - Only accepts postMessages from NYKNYC's origin
+ * - Authorization code is useless without PKCE code_verifier
+ * - 5-minute total timeout for both methods
+ * - Window close detection for user cancellation
+ * 
+ * @param authUrl - Full URL to NYKNYC auth page (includes PKCE params)
+ * @param state - PKCE state parameter (used for polling fallback)
+ * @param apiUrl - API URL for polling endpoint
+ * @param preOpenedWindow - Optional pre-opened window to avoid popup blockers
+ * @param baseUrl - Base URL for validating postMessage origin
+ * @returns Promise resolving to {code, state} when auth completes
+ * @throws Error if auth fails, is cancelled, or times out
  */
 export function openAuthWindow(
   authUrl: string,
+  state: string,
+  apiUrl: string,
   preOpenedWindow?: Window | null,
   baseUrl?: string
 ): Promise<{ code: string; state: string }> {
   return new Promise((resolve, reject) => {
-    // Open a new tab/window. If a preOpenedWindow was provided (opened synchronously on user gesture), reuse it to avoid popup blockers.
+    // Track which method completed first
+    let resolved = false
+    let pollingStarted = false
+    let pollingAbortController: AbortController | null = null
+
+    // Open a new tab/window. If preOpenedWindow was provided (opened synchronously on user gesture),
+    // reuse it to avoid popup blockers.
     let win: Window | null = preOpenedWindow ?? null
     if (win) {
-      try { win.location.href = authUrl } catch {}
-    } else {
+      try { 
+        win.location.href = authUrl 
+      } catch {
+        // If navigation fails, fall through to open new window
+        win = null
+      }
+    }
+    
+    if (!win) {
       win = window.open(authUrl, '_blank')
     }
+    
     if (!win) {
       reject(new Error('Failed to open authentication window. Please allow popups for this site.'))
       return
     }
 
     // Expected origin is NYKNYC's origin (where the OAuth page is hosted)
-    // NOT the dApp's origin (window.location.origin)
     const expectedOrigin = baseUrl || 'https://nyknyc.app'
 
+    /**
+     * PostMessage handler (primary method)
+     * Handles direct communication from NYKNYC page
+     */
     const onMessage = (event: MessageEvent) => {
+      // Validate origin for security
       try {
         if (event.origin !== expectedOrigin) {
           return
@@ -196,40 +234,120 @@ export function openAuthWindow(
       }
 
       const data = event.data || {}
+      
+      // Success case
       if (data?.type === 'NYKNYC_AUTH_SUCCESS' && typeof data.code === 'string' && typeof data.state === 'string') {
-        cleanup()
-        try { win.close() } catch {}
-        resolve({ code: data.code, state: data.state })
-      } else if (data?.type === 'NYKNYC_AUTH_ERROR') {
-        cleanup()
-        try { win.close() } catch {}
-        reject(new Error(data.error || 'Authentication failed'))
+        if (!resolved) {
+          resolved = true
+          cleanup()
+          try { win?.close() } catch {}
+          resolve({ code: data.code, state: data.state })
+        }
+      } 
+      // Error case
+      else if (data?.type === 'NYKNYC_AUTH_ERROR') {
+        if (!resolved) {
+          resolved = true
+          cleanup()
+          try { win?.close() } catch {}
+          reject(new Error(data.error || 'Authentication failed'))
+        }
       }
     }
 
+    /**
+     * Polling fallback (secondary method)
+     * Starts after 10 seconds if postMessage hasn't responded
+     */
+    const startPollingFallback = async () => {
+      if (resolved || pollingStarted) return
+      
+      pollingStarted = true
+      pollingAbortController = new AbortController()
+
+      try {
+        // Import polling function
+        const { pollAuthStatus } = await import('./api.js')
+        
+        // Start polling (will run until success, error, or timeout)
+        const result = await pollAuthStatus(apiUrl, state)
+        
+        // Only resolve if postMessage hasn't already won
+        if (!resolved) {
+          resolved = true
+          cleanup()
+          try { win?.close() } catch {}
+          resolve(result)
+        }
+      } catch (error) {
+        // Only reject if postMessage hasn't already won
+        if (!resolved) {
+          resolved = true
+          cleanup()
+          try { win?.close() } catch {}
+          reject(error)
+        }
+      }
+    }
+
+    /**
+     * Window close detection
+     * Rejects if user manually closes the window
+     */
     const onClosedCheck = setInterval(() => {
-      if (win.closed) {
-        cleanup()
-        reject(new Error('Authentication window was closed by the user'))
+      if (win?.closed) {
+        if (!resolved) {
+          resolved = true
+          cleanup()
+          reject(new Error('Authentication window was closed by the user'))
+        }
       }
     }, 1000)
 
+    /**
+     * Overall timeout (5 minutes)
+     * Ensures we don't wait forever
+     */
     const onTimeout = window.setTimeout(() => {
-      cleanup()
-      try { 
-        if (!win.closed) {
-          win.close()
-        }
-      } catch {}
-      reject(new Error('Authentication timed out'))
+      if (!resolved) {
+        resolved = true
+        cleanup()
+        try { 
+          if (win && !win.closed) {
+            win.close()
+          }
+        } catch {}
+        reject(new Error('Authentication timed out (5 minutes)'))
+      }
     }, 5 * 60 * 1000)
 
+    /**
+     * Polling delay timer
+     * Starts polling after 10 seconds if no postMessage received
+     */
+    const pollingDelayTimer = window.setTimeout(() => {
+      if (!resolved) {
+        startPollingFallback()
+      }
+    }, 10000) // 10 seconds delay before starting polling
+
+    /**
+     * Cleanup function
+     * Removes all listeners and timers
+     */
     function cleanup() {
       window.removeEventListener('message', onMessage)
       clearInterval(onClosedCheck)
       clearTimeout(onTimeout)
+      clearTimeout(pollingDelayTimer)
+      
+      // Abort ongoing polling if any
+      if (pollingAbortController) {
+        pollingAbortController.abort()
+      }
     }
 
+    // Start listening for postMessage immediately
     window.addEventListener('message', onMessage)
   })
 }

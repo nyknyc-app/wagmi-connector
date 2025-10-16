@@ -267,51 +267,99 @@ export function openUnsupportedChainWindow(chainId: number, baseUrl?: string): v
 /**
  * Opens signing flow in a new tab/window and waits for completion message (postMessage).
  * Polling is expected to be handled by the caller after this resolves.
+ * 
+ * @param popupUrl - The URL to open in the window
+ * @param baseUrl - Base URL for validating postMessage origin
+ * @param preOpenedWindow - Optional pre-opened window to avoid popup blockers
  */
-export function openSigningWindow(popupUrl: string, baseUrl?: string): Promise<void> {
+export function openSigningWindow(
+  popupUrl: string, 
+  baseUrl?: string,
+  preOpenedWindow?: Window | null
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    // Open as a new tab/window without sizing features so it's not a small popup.
-    const win = window.open(popupUrl, '_blank')
-    if (!win) {
-      reject(new Error('Failed to open NYKNYC window. Please allow popups for this site.'))
-      return
-    }
-
     const allowedHost = baseUrl ? new URL(baseUrl).host : 'nyknyc.app'
 
-    // Optional message handling: if the child can postMessage to opener, close the window early.
-    const messageListener = (event: MessageEvent) => {
-      try {
-        const eventHost = new URL(event.origin).host
-        if (eventHost !== allowedHost) return
-      } catch {
-        return
+    const tryOpenWindow = (url: string): Window | null => {
+      // If a pre-opened window was provided, navigate it to the URL
+      if (preOpenedWindow && !preOpenedWindow.closed) {
+        try {
+          preOpenedWindow.location.href = url
+          return preOpenedWindow
+        } catch {
+          // If navigation fails, fall through to open new window
+        }
       }
-
-      if (event.data?.type === 'NYKNYC_SIGN_SUCCESS' || event.data?.type === 'NYKNYC_SIGN_ERROR') {
-        window.removeEventListener('message', messageListener)
-        try { win.close() } catch {}
-      }
+      
+      // Otherwise try to open a new window
+      return window.open(url, '_blank')
     }
-    window.addEventListener('message', messageListener)
 
-    // Clean up if user closes the tab manually; do not reject here to allow polling-based flows to proceed.
-    const checkClosed = setInterval(() => {
-      if (win.closed) {
-        clearInterval(checkClosed)
-        window.removeEventListener('message', messageListener)
+    const setupWindow = (win: Window) => {
+      // Optional message handling: if the child can postMessage to opener, close the window early.
+      const messageListener = (event: MessageEvent) => {
+        try {
+          const eventHost = new URL(event.origin).host
+          if (eventHost !== allowedHost) return
+        } catch {
+          return
+        }
+
+        if (event.data?.type === 'NYKNYC_SIGN_SUCCESS' || event.data?.type === 'NYKNYC_SIGN_ERROR') {
+          window.removeEventListener('message', messageListener)
+          try { win.close() } catch {}
+        }
       }
-    }, 1000)
+      window.addEventListener('message', messageListener)
 
-    // // Auto-close after 10 minutes to avoid orphaned tabs.
-    // const timeoutId = setTimeout(() => {
-    //   clearInterval(checkClosed)
-    //   window.removeEventListener('message', messageListener)
-    //   try { if (!win.closed) win.close() } catch {}
-    // }, 10 * 60 * 1000)
+      // Clean up if user closes the tab manually; do not reject here to allow polling-based flows to proceed.
+      const checkClosed = setInterval(() => {
+        if (win.closed) {
+          clearInterval(checkClosed)
+          window.removeEventListener('message', messageListener)
+        }
+      }, 1000)
 
-    // Resolve immediately so the caller can start polling server-side status.
-    resolve()
+      // Resolve immediately so the caller can start polling server-side status.
+      resolve()
+    }
+
+    // Try to open the window
+    let win = tryOpenWindow(popupUrl)
+
+    if (!win) {
+      // Popup was blocked - show snackbar with retry button
+      // Import snackbar dynamically to avoid circular dependencies
+      import('./snackbar.js').then(({ getSnackbar, RETRY_BUTTON }) => {
+        const snackbar = getSnackbar()
+        
+        snackbar.presentItem({
+          autoExpand: true,
+          message: 'Popup was blocked. Please try again.',
+          menuItems: [
+            {
+              ...RETRY_BUTTON,
+              onClick: () => {
+                win = tryOpenWindow(popupUrl)
+                if (win) {
+                  snackbar.clear()
+                  setupWindow(win)
+                } else {
+                  // Still blocked after retry
+                  snackbar.clear()
+                  reject(new Error('Failed to open window. Please allow popups for this site.'))
+                }
+              },
+            },
+          ],
+        })
+      }).catch(() => {
+        // Fallback if snackbar fails to load
+        reject(new Error('Failed to open NYKNYC window. Please allow popups for this site.'))
+      })
+    } else {
+      setupWindow(win)
+    }
   })
 }
 
@@ -450,4 +498,123 @@ export function validateApiResponse(response: Response): void {
       throw new Error(`API request failed with status ${response.status}`)
     }
   }
+}
+
+/**
+ * Polls the OAuth status endpoint to retrieve authorization code
+ * 
+ * This is used as a fallback when postMessage communication fails due to OAuth redirects
+ * (e.g., when user authenticates via Google/Discord which causes the popup to lose context)
+ * 
+ * Flow:
+ * 1. NYKNYC backend stores authorization code in Redis after OAuth callback
+ * 2. This function polls GET /oauth/poll-status/{state} every 2 seconds
+ * 3. Returns when status becomes 'completed' (with code) or 'error'/'expired'
+ * 4. Backend maintains a 30-second grace period after first retrieval
+ * 
+ * Security:
+ * - Authorization code is useless without PKCE code_verifier (which only client has)
+ * - State parameter is cryptographically random (32 bytes)
+ * - Redis key auto-expires after 5 minutes
+ * - Code can only be exchanged once at token endpoint
+ * 
+ * @param apiUrl - Base API URL (e.g., 'https://api.nyknyc.app')
+ * @param state - PKCE state parameter (used as Redis key identifier)
+ * @param maxAttempts - Maximum number of polling attempts (default: 150 = 5 minutes at 2s interval)
+ * @param intervalMs - Milliseconds between polling attempts (default: 2000 = 2 seconds)
+ * @returns Promise resolving to {code, state} when auth completes
+ * @throws Error if auth fails, expires, or times out
+ */
+export async function pollAuthStatus(
+  apiUrl: string,
+  state: string,
+  maxAttempts: number = 150, // 150 * 2s = 5 minutes total timeout
+  intervalMs: number = 2000   // Poll every 2 seconds
+): Promise<{ code: string; state: string }> {
+  // Validate inputs
+  if (!state || typeof state !== 'string') {
+    throw new Error('Invalid state parameter for polling')
+  }
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      // Make GET request to polling endpoint
+      const response = await fetch(`${apiUrl}/oauth/poll-status/${state}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
+
+      // Handle non-200 responses gracefully
+      if (!response.ok) {
+        if (response.status === 404) {
+          // State not found - continue polling (may not be created yet)
+          await new Promise((resolve) => setTimeout(resolve, intervalMs))
+          continue
+        } else if (response.status === 429) {
+          // Rate limited - wait longer before next attempt
+          await new Promise((resolve) => setTimeout(resolve, intervalMs * 2))
+          continue
+        } else if (response.status >= 500) {
+          // Server error - continue polling with exponential backoff
+          const backoffMs = Math.min(intervalMs * Math.pow(1.5, attempt), 10000)
+          await new Promise((resolve) => setTimeout(resolve, backoffMs))
+          continue
+        }
+        
+        // Other errors - throw
+        throw new Error(`Polling failed with status ${response.status}`)
+      }
+
+      // Parse response
+      const data = await response.json() as import('../types.js').AuthPollResponse
+
+      // Handle different status values
+      switch (data.status) {
+        case 'completed':
+          // Success! Authorization code is ready
+          if (!data.code || typeof data.code !== 'string') {
+            throw new Error('Invalid response: missing authorization code')
+          }
+          return { code: data.code, state }
+
+        case 'error':
+          // Authentication failed (e.g., user denied consent)
+          throw new Error(data.error || 'Authentication failed')
+
+        case 'expired':
+          // Request expired or was not found
+          throw new Error(data.error || 'Authentication request expired')
+
+        case 'pending':
+          // Still waiting - continue polling
+          await new Promise((resolve) => setTimeout(resolve, intervalMs))
+          break
+
+        default:
+          // Unknown status - continue polling but log warning
+          console.warn('Unknown polling status:', data.status)
+          await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      }
+    } catch (error) {
+      // If this is the last attempt, throw the error
+      if (attempt === maxAttempts - 1) {
+        throw error
+      }
+
+      // For network errors, continue polling with backoff
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        const backoffMs = Math.min(intervalMs * Math.pow(1.5, attempt), 10000)
+        await new Promise((resolve) => setTimeout(resolve, backoffMs))
+        continue
+      }
+
+      // For other errors, rethrow immediately
+      throw error
+    }
+  }
+
+  // Timeout - exceeded maximum polling attempts
+  throw new Error('Authentication timeout: polling exceeded maximum duration (5 minutes)')
 }

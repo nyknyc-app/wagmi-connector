@@ -1,6 +1,4 @@
-import type { Address, PublicClient } from 'viem'
 import type { SignStatus } from '../types.js'
-import { verifySmartSignature } from './verify.js'
 
 /**
  * Normalize SignStatus payloads from backend.
@@ -53,37 +51,4 @@ export function normalizeSignStatusPayload(raw: any): SignStatus {
 
   // Already canonical or unknown extra fields — return as-is.
   return raw as SignStatus
-}
-
-/**
- * Verify directly from a /user/sign/:id poll response (works for both deployed and undeployed).
- * - Normalizes payload shape.
- * - Uses message_hash / typed_data_hash when available to avoid hashing drift.
- */
-export async function verifyFromSignPollResponse(params: {
-  statusPayload: any
-  client: PublicClient
-  address?: Address
-}): Promise<boolean> {
-  const { statusPayload, client, address } = params
-  const st = normalizeSignStatusPayload(statusPayload)
-
-  if (st.status !== 'signed') return false
-
-  const signer = (address ?? st.signer_address) as Address
-  if (!signer) return false
-
-  const kind = st.signature_type === 'eip712' ? 'eip712' : 'personal'
-  const signature_6492 = st.envelope?.signature_6492 as `0x${string}` | undefined
-  const finalSignature = st.envelope?.finalSignature as `0x${string}` | undefined
-
-  return verifySmartSignature({
-    address: signer,
-    kind,
-    signature_6492,
-    finalSignature,
-    message_hash: st.message_hash as `0x${string}` | undefined,
-    typed_data_hash: st.typed_data_hash as `0x${string}` | undefined,
-    client,
-  })
 }
