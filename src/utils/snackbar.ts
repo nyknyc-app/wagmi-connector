@@ -22,9 +22,11 @@ export interface SnackbarItemProps {
   onDismiss?: () => void
 }
 
-const RETRY_SVG_PATH = 'M5.5 1.5L1.5 5.5m0 0L1.5 1.5m0 4l4-4m-4 4l-4 4m4-4l4 4'
+// Retry icon - Bootstrap Icons repeat (16x16 viewBox)
+const RETRY_SVG_PATH = 'M11 5.466V4H5a4 4 0 0 0-3.584 5.777.5.5 0 1 1-.896.446A5 5 0 0 1 5 3h6V1.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384l-2.36 1.966a.25.25 0 0 1-.41-.192m3.81.086a.5.5 0 0 1 .67.225A5 5 0 0 1 11 13H5v1.466a.25.25 0 0 1-.41.192l-2.36-1.966a.25.25 0 0 1 0-.384l2.36-1.966a.25.25 0 0 1 .41.192V12h6a4 4 0 0 0 3.585-5.777.5.5 0 0 1 .225-.67Z'
 
-const ALERT_SVG_PATH = 'M12 4.354a.647.647 0 0 1 1.14.431v6.43a.647.647 0 0 1-1.28 0v-6.43a.647.647 0 0 1 .14-.431ZM12.5 14a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z'
+// Alert icon - exclamation mark (properly scaled for 20x20 viewBox)
+const ALERT_SVG_PATH = 'M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm0 12a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm0-10a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V5a1 1 0 0 1 1-1z'
 
 const CLOSE_SVG_PATH = 'M6.225 4.811a1 1 0 0 0-1.414 1.414L10.586 12 4.81 17.775a1 1 0 1 0 1.414 1.414L12 13.414l5.775 5.775a1 1 0 0 0 1.414-1.414L13.414 12l5.775-5.775a1 1 0 0 0-1.414-1.414L12 10.586 6.225 4.81Z'
 
@@ -37,11 +39,9 @@ const NYKNYC_LOGO = `<svg width="24" height="24" viewBox="0 0 32 32" fill="none"
 export const RETRY_BUTTON: Omit<SnackbarMenuItem, 'onClick'> = {
   isRed: false,
   info: 'Retry',
-  svgWidth: '10',
-  svgHeight: '11',
+  svgWidth: '16',
+  svgHeight: '16',
   path: RETRY_SVG_PATH,
-  defaultFillRule: 'evenodd',
-  defaultClipRule: 'evenodd',
 }
 
 export class Snackbar {
@@ -174,9 +174,9 @@ export class Snackbar {
     iconContainer.className = 'nyknyc-snackbar-alert-icon'
     
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-    svg.setAttribute('width', '16')
-    svg.setAttribute('height', '16')
-    svg.setAttribute('viewBox', '0 0 24 24')
+    svg.setAttribute('width', '20')
+    svg.setAttribute('height', '20')
+    svg.setAttribute('viewBox', '0 0 20 20')
     svg.setAttribute('fill', 'none')
     
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
@@ -223,10 +223,16 @@ export class Snackbar {
     this.applyButtonStyles(button, item.isRed)
 
     if (item.path) {
+      const iconWrapper = document.createElement('span')
+      iconWrapper.style.display = 'flex'
+      iconWrapper.style.alignItems = 'center'
+      iconWrapper.style.justifyContent = 'center'
+      
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-      svg.setAttribute('width', item.svgWidth || '12')
-      svg.setAttribute('height', item.svgHeight || '12')
-      svg.setAttribute('viewBox', `0 0 ${item.svgWidth || '12'} ${item.svgHeight || '12'}`)
+      const size = item.svgWidth || '16'
+      svg.setAttribute('width', size)
+      svg.setAttribute('height', item.svgHeight || size)
+      svg.setAttribute('viewBox', `0 0 ${size} ${item.svgHeight || size}`)
       svg.setAttribute('fill', 'none')
 
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
@@ -240,7 +246,8 @@ export class Snackbar {
       }
 
       svg.appendChild(path)
-      button.appendChild(svg)
+      iconWrapper.appendChild(svg)
+      button.appendChild(iconWrapper)
     }
 
     const text = document.createElement('span')
@@ -267,38 +274,33 @@ export class Snackbar {
   }
 
   private applyItemStyles(element: HTMLElement): void {
+    const isMobile = window.innerWidth < 640
+    
     Object.assign(element.style, {
       display: 'flex',
       alignItems: 'center',
-      gap: '12px',
-      padding: '14px 16px',
-      // Glassmorphism effect - subtle and professional
+      gap: isMobile ? '10px' : '12px',
+      padding: isMobile ? '12px 14px' : '14px 16px',
       background: 'rgba(26, 26, 26, 0.95)',
       backdropFilter: 'blur(12px)',
       WebkitBackdropFilter: 'blur(12px)',
       border: '1px solid rgba(255, 255, 255, 0.08)',
       color: '#FFFFFF',
       borderRadius: '12px',
-      // Enhanced shadow for depth
       boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2)',
-      minWidth: '320px',
-      maxWidth: '480px',
+      width: isMobile ? 'calc(100vw - 40px)' : '400px',
+      minWidth: isMobile ? '280px' : '400px',
+      maxWidth: isMobile ? 'calc(100vw - 40px)' : '400px',
       opacity: '0',
       transform: 'translateY(20px)',
       transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
     })
 
-    // Add expanded class styles with bounce effect
+    // Animate in
     setTimeout(() => {
       element.style.opacity = '1'
       element.style.transform = 'translateY(0)'
     }, 10)
-
-    // Mobile responsive
-    if (window.innerWidth < 640) {
-      element.style.minWidth = '280px'
-      element.style.maxWidth = 'calc(100vw - 40px)'
-    }
   }
 
   private applyLogoStyles(element: HTMLElement): void {
@@ -316,9 +318,10 @@ export class Snackbar {
     Object.assign(element.style, {
       display: 'flex',
       flexDirection: 'column',
+      alignItems: 'center',
       gap: '10px',
       flex: '1',
-      minWidth: '0', // Prevent flex overflow
+      minWidth: '0',
     })
   }
 
@@ -336,6 +339,8 @@ export class Snackbar {
       alignItems: 'center',
       justifyContent: 'center',
       flexShrink: '0',
+      width: '20px',
+      height: '20px',
     })
   }
 
@@ -345,27 +350,31 @@ export class Snackbar {
       fontSize: '14px',
       lineHeight: '1.5',
       color: 'rgba(255, 255, 255, 0.95)',
+      wordBreak: 'break-word',
     })
   }
 
   private applyMenuStyles(element: HTMLElement): void {
     Object.assign(element.style, {
       display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
       gap: '8px',
-      flexWrap: 'wrap',
+      width: '100%',
     })
   }
 
   private applyButtonStyles(element: HTMLElement, isRed?: boolean): void {
-    // Use brand color for primary button
     const primaryColor = '#0bb4ff'
     const primaryHover = '#0099dd'
     
     Object.assign(element.style, {
-      display: 'flex',
+      display: 'inline-flex',
       alignItems: 'center',
+      justifyContent: 'center',
       gap: '6px',
       padding: '8px 16px',
+      width: '80%',
       backgroundColor: isRed ? '#DC2626' : primaryColor,
       color: '#FFFFFF',
       border: 'none',
@@ -378,6 +387,7 @@ export class Snackbar {
       boxShadow: isRed 
         ? '0 2px 8px rgba(220, 38, 38, 0.3)' 
         : '0 2px 8px rgba(11, 180, 255, 0.3)',
+      minHeight: '36px',
     })
 
     element.onmouseenter = () => {

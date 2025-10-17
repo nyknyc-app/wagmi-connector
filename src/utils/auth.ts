@@ -220,8 +220,9 @@ export function openAuthWindow(
     const expectedOrigin = baseUrl || 'https://nyknyc.app'
 
     /**
-     * PostMessage handler (primary method)
+     * PostMessage handler (primary method - fast path)
      * Handles direct communication from NYKNYC page
+     * Note: No longer rejects on errors - falls back to polling instead
      */
     const onMessage = (event: MessageEvent) => {
       // Validate origin for security
@@ -235,7 +236,7 @@ export function openAuthWindow(
 
       const data = event.data || {}
       
-      // Success case
+      // Success case - postMessage wins!
       if (data?.type === 'NYKNYC_AUTH_SUCCESS' && typeof data.code === 'string' && typeof data.state === 'string') {
         if (!resolved) {
           resolved = true
@@ -244,20 +245,18 @@ export function openAuthWindow(
           resolve({ code: data.code, state: data.state })
         }
       } 
-      // Error case
+      // Error case - log but don't reject, let polling determine actual status
+      // This prevents false negatives from postMessage errors during redirects
       else if (data?.type === 'NYKNYC_AUTH_ERROR') {
-        if (!resolved) {
-          resolved = true
-          cleanup()
-          try { win?.close() } catch {}
-          reject(new Error(data.error || 'Authentication failed'))
-        }
+        console.warn('[NYKNYC] PostMessage error received (will rely on polling):', data.error)
+        // Don't reject - polling will provide definitive answer from backend
       }
     }
 
     /**
-     * Polling fallback (secondary method)
-     * Starts after 10 seconds if postMessage hasn't responded
+     * Polling (concurrent method - reliable fallback)
+     * Starts immediately alongside postMessage
+     * Handles cases where postMessage fails (OAuth redirects, cross-origin issues, etc.)
      */
     const startPollingFallback = async () => {
       if (resolved || pollingStarted) return
@@ -291,20 +290,6 @@ export function openAuthWindow(
     }
 
     /**
-     * Window close detection
-     * Rejects if user manually closes the window
-     */
-    const onClosedCheck = setInterval(() => {
-      if (win?.closed) {
-        if (!resolved) {
-          resolved = true
-          cleanup()
-          reject(new Error('Authentication window was closed by the user'))
-        }
-      }
-    }, 1000)
-
-    /**
      * Overall timeout (5 minutes)
      * Ensures we don't wait forever
      */
@@ -322,24 +307,12 @@ export function openAuthWindow(
     }, 5 * 60 * 1000)
 
     /**
-     * Polling delay timer
-     * Starts polling after 10 seconds if no postMessage received
-     */
-    const pollingDelayTimer = window.setTimeout(() => {
-      if (!resolved) {
-        startPollingFallback()
-      }
-    }, 10000) // 10 seconds delay before starting polling
-
-    /**
      * Cleanup function
      * Removes all listeners and timers
      */
     function cleanup() {
       window.removeEventListener('message', onMessage)
-      clearInterval(onClosedCheck)
       clearTimeout(onTimeout)
-      clearTimeout(pollingDelayTimer)
       
       // Abort ongoing polling if any
       if (pollingAbortController) {
@@ -347,7 +320,12 @@ export function openAuthWindow(
       }
     }
 
-    // Start listening for postMessage immediately
+    // Start listening for postMessage immediately (fast path)
     window.addEventListener('message', onMessage)
+    
+    // Start polling immediately (reliable path)
+    // This prevents false positives from window closure detection during OAuth redirects
+    // and ensures we get definitive status from the backend
+    startPollingFallback()
   })
 }

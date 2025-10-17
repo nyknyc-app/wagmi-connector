@@ -271,11 +271,13 @@ export function openUnsupportedChainWindow(chainId: number, baseUrl?: string): v
  * @param popupUrl - The URL to open in the window
  * @param baseUrl - Base URL for validating postMessage origin
  * @param preOpenedWindow - Optional pre-opened window to avoid popup blockers
+ * @param forcePopupBlock - Optional testing parameter to simulate popup blocking
  */
 export function openSigningWindow(
   popupUrl: string, 
   baseUrl?: string,
-  preOpenedWindow?: Window | null
+  preOpenedWindow?: Window | null,
+  forcePopupBlock?: boolean
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const allowedHost = baseUrl ? new URL(baseUrl).host : 'nyknyc.app'
@@ -326,6 +328,13 @@ export function openSigningWindow(
 
     // Try to open the window
     let win = tryOpenWindow(popupUrl)
+
+    // For testing: force popup block detection even if window opened successfully
+    if (forcePopupBlock && win) {
+      // Close the successfully opened window for testing
+      try { win.close() } catch {}
+      win = null
+    }
 
     if (!win) {
       // Popup was blocked - show snackbar with retry button
@@ -546,29 +555,39 @@ export async function pollAuthStatus(
         },
       })
 
-      // Handle non-200 responses gracefully
-      if (!response.ok) {
-        if (response.status === 404) {
-          // State not found - continue polling (may not be created yet)
-          await new Promise((resolve) => setTimeout(resolve, intervalMs))
-          continue
-        } else if (response.status === 429) {
-          // Rate limited - wait longer before next attempt
-          await new Promise((resolve) => setTimeout(resolve, intervalMs * 2))
-          continue
-        } else if (response.status >= 500) {
-          // Server error - continue polling with exponential backoff
-          const backoffMs = Math.min(intervalMs * Math.pow(1.5, attempt), 10000)
-          await new Promise((resolve) => setTimeout(resolve, backoffMs))
-          continue
+      // Parse response body (even for non-200 responses to check for specific error structures)
+      let data: import('../types.js').AuthPollResponse
+      try {
+        data = await response.json() as import('../types.js').AuthPollResponse
+      } catch (parseError) {
+        // If we can't parse JSON, fall back to HTTP status code handling
+        if (!response.ok) {
+          if (response.status === 404) {
+            // State not found - continue polling (may not be created yet)
+            await new Promise((resolve) => setTimeout(resolve, intervalMs))
+            continue
+          } else if (response.status === 429) {
+            // Rate limited - wait longer before next attempt
+            await new Promise((resolve) => setTimeout(resolve, intervalMs * 2))
+            continue
+          } else if (response.status >= 500) {
+            // Server error - continue polling with exponential backoff
+            const backoffMs = Math.min(intervalMs * Math.pow(1.5, attempt), 10000)
+            await new Promise((resolve) => setTimeout(resolve, backoffMs))
+            continue
+          }
+          
+          throw new Error(`Polling failed with status ${response.status}`)
         }
-        
-        // Other errors - throw
-        throw new Error(`Polling failed with status ${response.status}`)
+        throw parseError
       }
 
-      // Parse response
-      const data = await response.json() as import('../types.js').AuthPollResponse
+      // Check for "not_found" status in response body (backend may return this instead of 404)
+      if (data.status === 'not_found') {
+        // Authorization request not found yet - continue polling (backend may not have created it yet)
+        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+        continue
+      }
 
       // Handle different status values
       switch (data.status) {

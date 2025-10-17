@@ -83,10 +83,10 @@ export interface AuthCallbackData {
  */
 export interface AuthPollResponse {
   /** Current status of the authentication request */
-  status: 'pending' | 'completed' | 'error' | 'expired'
+  status: 'pending' | 'completed' | 'error' | 'expired' | 'not_found'
   /** Authorization code (only present when status is 'completed') */
   code?: string
-  /** Error message (only present when status is 'error' or 'expired') */
+  /** Error message (only present when status is 'error', 'expired', or 'not_found') */
   error?: string
   /** Optional: seconds until the auth request expires */
   expires_in?: number

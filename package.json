@@ -1,6 +1,6 @@
 {
   "name": "@nyknyc/wagmi-connector",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "NYKNYC 4337 Smart Wallet Connector for Wagmi",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
