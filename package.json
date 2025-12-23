@@ -42,8 +42,8 @@
     "url": "https://github.com/nyknyc-app/wagmi-connector"
   },
   "peerDependencies": {
-    "@wagmi/core": "^2.22.0",
-    "viem": "^2.21.0"
+    "@wagmi/core": "^3.0.0",
+    "viem": "^2.43.3"
   },
   "devDependencies": {
     "@types/node": "^25.0.3",
