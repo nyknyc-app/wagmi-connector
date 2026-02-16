@@ -82,27 +82,23 @@ export function nyknyc(parameters: NyknycParameters) {
         logger.log('Event listeners attached')
       }
       
-      // Get current chain ID
-      let currentChainId = await connector.getChainId()
-      logger.log('Current chain ID:', currentChainId)
+      // Get current chain ID from persisted session
+      // Trust our own persisted chainId during reconnection - don't switch to params.chainId
+      // This ensures chain switches are preserved across page refreshes
+      const currentChainId = await connector.getChainId()
+      logger.log('Reconnecting with persisted chain ID:', currentChainId)
       
-      // Switch to requested chain if provided
+      // Note: We intentionally do NOT switch to params.chainId during reconnection.
+      // The persisted session chainId takes precedence to ensure chain switches persist
+      // across page refreshes. params.chainId may come from wagmi's separate state
+      // which could be stale.
       if (params?.chainId && currentChainId !== params.chainId) {
-        logger.log('Switching to requested chain:', params.chainId)
-        const chain = await connector.switchChain!({ 
-          chainId: params.chainId,
-          addEthereumChainParameter: undefined 
-        }).catch((error) => {
-          logger.error('Chain switch failed:', error)
-          if (error.code === UserRejectedRequestError.code) throw error
-          return { id: currentChainId }
-        })
-        currentChainId = chain?.id ?? currentChainId
+        logger.log('Ignoring requested chain switch during reconnection. Persisted chainId:', currentChainId, 'Requested chainId:', params.chainId)
       }
       
       logger.log('Reconnection successful')
       
-      // Return cached state
+      // Return cached state with persisted chainId
       return {
         accounts: (params?.withCapabilities
           ? accounts.map((address) => ({ address, capabilities: {} }))

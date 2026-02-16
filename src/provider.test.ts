@@ -386,6 +386,74 @@ describe('NYKNYC Provider - Core Functionality', () => {
       )
     })
 
+    it('should sign typed data Permit-style payload (v4, with EIP712Domain)', async () => {
+      const mockSignResponse = {
+        sign_id: 'sign_123',
+        popup_url: 'https://test.nyknyc.app/sign/123',
+      }
+      const mockSignResult = {
+        envelope: { signature: '0xtypeddata_signature' },
+      }
+
+      vi.mocked(api.createSignRequest).mockResolvedValue(mockSignResponse)
+      vi.mocked(api.openSigningWindow).mockResolvedValue(undefined)
+      vi.mocked(api.waitForSignCompletion).mockResolvedValue(mockSignResult)
+
+      const permitTypedData = {
+        domain: {
+          name: 'USDC',
+          version: '2',
+          chainId: '11155111',
+          verifyingContract: '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238',
+        },
+        message: {
+          owner: '0xaa64b274f0d369df1bfc07d33eae3a6b599f5c7e',
+          spender: '0x80401461018d653559c93517e9398677418a4e11',
+          value: '1050000',
+          nonce: '0',
+          deadline: '1769673787',
+        },
+        primaryType: 'Permit',
+        types: {
+          EIP712Domain: [
+            { name: 'name', type: 'string' },
+            { name: 'version', type: 'string' },
+            { name: 'chainId', type: 'uint256' },
+            { name: 'verifyingContract', type: 'address' },
+          ],
+          Permit: [
+            { name: 'owner', type: 'address' },
+            { name: 'spender', type: 'address' },
+            { name: 'value', type: 'uint256' },
+            { name: 'nonce', type: 'uint256' },
+            { name: 'deadline', type: 'uint256' },
+          ],
+        },
+      }
+
+      const result = await provider.request({
+        method: 'eth_signTypedData_v4',
+        params: [mockSession.walletAddress, permitTypedData],
+      })
+
+      expect(result).toBe('0xtypeddata_signature')
+
+      // Ensure we normalized chainId to a number before sending to API
+      expect(api.createSignRequest).toHaveBeenCalledWith(
+        mockParameters.apiUrl,
+        mockSession.accessToken,
+        mockParameters.appId,
+        expect.objectContaining({
+          kind: 'eth_signTypedData_v4',
+          typed_data: expect.objectContaining({
+            domain: expect.objectContaining({ chainId: 11155111 }),
+            primaryType: 'Permit',
+          }),
+        }),
+        expect.any(Function)
+      )
+    })
+
     it('should sign typed data (JSON string format)', async () => {
       const mockSignResponse = { 
         sign_id: 'sign_123',

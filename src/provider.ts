@@ -21,6 +21,34 @@ import { Logger } from './utils/logger.js'
 const isStrictHex = (s: string) =>
   typeof s === 'string' && /^0x[0-9a-fA-F]*$/.test(s)
 
+function deepJsonSafe(value: any): any {
+  // Convert BigInt into a JSON-safe decimal string; recurse into arrays/objects.
+  if (typeof value === 'bigint') return value.toString()
+  if (Array.isArray(value)) return value.map(deepJsonSafe)
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {}
+    for (const [k, v] of Object.entries(value)) out[k] = deepJsonSafe(v)
+    return out
+  }
+  return value
+}
+
+function normalizeTypedDataV4(typedData: any): any {
+  const safe = deepJsonSafe(typedData)
+
+  // Best-effort normalization for common v4 payloads.
+  // (Does not change structure; only coerces domain.chainId when it is a decimal string.)
+  try {
+    const chainId = safe?.domain?.chainId
+    if (typeof chainId === 'string' && /^[0-9]+$/.test(chainId)) {
+      const n = Number(chainId)
+      if (Number.isFinite(n)) safe.domain.chainId = n
+    }
+  } catch {}
+
+  return safe
+}
+
 function hexToUtf8(hex: string): string {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex
   if (h.length % 2 !== 0) throw new Error('Invalid hex string length')
@@ -356,7 +384,8 @@ export class NyknycProvider implements EthereumProvider {
     const preWindow = typeof window !== 'undefined' ? window.open('about:blank', '_blank') : null
 
     // Accept both JSON string and object for v4
-    const typedData = typeof _typedData === 'string' ? JSON.parse(_typedData) : _typedData
+    const typedDataRaw = typeof _typedData === 'string' ? JSON.parse(_typedData) : _typedData
+    const typedData = normalizeTypedDataV4(typedDataRaw)
 
     const signReq = {
       kind: 'eth_signTypedData_v4' as const,
